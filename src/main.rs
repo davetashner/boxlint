@@ -2053,6 +2053,20 @@ mod tests {
     }
 
     #[test]
+    fn check_clean_diagram_regions_returns_zero() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_regions_clean");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn check_warnings_only_returns_zero() {
         struct WarnOnlyRule;
         impl LintRule for WarnOnlyRule {
