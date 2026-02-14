@@ -200,6 +200,36 @@ fn widen_box_right(
 }
 
 // ---------------------------------------------------------------------------
+// Edge padding: extend short content lines to box width
+// ---------------------------------------------------------------------------
+
+fn pad_short_content_lines(grid: &mut [Vec<char>], bounds: &BoundingRect, style: BoxStyle) {
+    let r1 = bounds.top_left.row;
+    let r2 = bounds.bottom_right.row;
+    let c1 = bounds.top_left.col;
+    let c2 = bounds.bottom_right.col;
+    let left_edge = style.vertical();
+
+    for r in (r1 + 1)..r2 {
+        let row_len = grid[r].len();
+
+        // Only pad if the row starts with the correct left edge
+        if grid_get(grid, r, c1) != Some(left_edge) {
+            continue;
+        }
+
+        // If the row is already at or beyond the expected width, skip
+        if row_len > c2 {
+            continue;
+        }
+
+        // Extend with spaces and add closing edge
+        grid[r].resize(c2 + 1, ' ');
+        grid[r][c2] = style.vertical();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Content re-padding
 // ---------------------------------------------------------------------------
 
@@ -317,7 +347,13 @@ impl Fixer for BoxContentFixer {
         // 2. Build mutable grid
         let mut grid = input_to_mut_grid(input);
 
-        // 3. Process each box
+        // 3. Pad short content lines to box width (Phase 3: edge padding)
+        for (bounds, _) in &boxes {
+            let style = detect_style(&grid, bounds);
+            pad_short_content_lines(&mut grid, bounds, style);
+        }
+
+        // 4. Process each box for widening
         for (bounds, content) in &boxes {
             let c1 = bounds.top_left.col;
             let c2 = bounds.bottom_right.col;
@@ -369,7 +405,7 @@ impl Fixer for BoxContentFixer {
             repad_content(&mut grid, bounds, new_c2, current_interior);
         }
 
-        // 4. Rebuild string
+        // 5. Rebuild string
         let mut result = mut_grid_to_string(&grid);
         if trailing_newline {
             result.push('\n');
@@ -794,5 +830,106 @@ mod tests {
 │      │
 └──────┘";
         assert_eq!(fix(input), input);
+    }
+
+    // == Edge padding (Phase 3) ================================================
+
+    #[test]
+    fn pad_short_line_adds_closing_edge() {
+        let input = "\
+┌──────┐
+│ hi
+└──────┘";
+        let expected = "\
+┌──────┐
+│ hi   │
+└──────┘";
+        assert_eq!(fix(input), expected);
+    }
+
+    #[test]
+    fn pad_multiple_short_lines() {
+        let input = "\
+┌──────┐
+│ one
+│ two
+└──────┘";
+        let expected = "\
+┌──────┐
+│ one  │
+│ two  │
+└──────┘";
+        assert_eq!(fix(input), expected);
+    }
+
+    #[test]
+    fn pad_already_correct_no_change() {
+        let input = "\
+┌──────┐
+│ hi   │
+└──────┘";
+        assert_eq!(fix(input), input);
+    }
+
+    #[test]
+    fn pad_double_line_style() {
+        let input = "\
+╔══════╗
+║ hi
+╚══════╝";
+        let expected = "\
+╔══════╗
+║ hi   ║
+╚══════╝";
+        assert_eq!(fix(input), expected);
+    }
+
+    #[test]
+    fn pad_skips_line_without_left_edge() {
+        // A content line missing the left edge char should not be padded.
+        // We test pad_short_content_lines directly since the box detector
+        // may not find boxes with missing edges.
+        use crate::grid::Position;
+        let mut grid = input_to_mut_grid("┌──────┐\n  hi\n└──────┘");
+        let bounds = BoundingRect {
+            top_left: Position { row: 0, col: 0 },
+            bottom_right: Position { row: 2, col: 7 },
+        };
+        pad_short_content_lines(&mut grid, &bounds, BoxStyle::Single);
+        // Line 1 doesn't start with │, so should not get right edge added
+        let line1: String = grid[1].iter().collect();
+        assert!(
+            !line1.ends_with('│'),
+            "line without left edge should not get right edge: {line1}"
+        );
+    }
+
+    #[test]
+    fn pad_short_line_empty_content() {
+        let input = "\
+┌──────┐
+│
+└──────┘";
+        let expected = "\
+┌──────┐
+│      │
+└──────┘";
+        assert_eq!(fix(input), expected);
+    }
+
+    #[test]
+    fn pad_preserves_existing_content() {
+        let input = "\
+┌──────────┐
+│ content
+│ ok       │
+└──────────┘";
+        let fixed = fix(input);
+        assert!(
+            fixed.contains("│ content  │"),
+            "padded line should have correct width: {fixed}"
+        );
+        // "ok" gets left-repadded since content is left-aligned
+        assert!(fixed.contains("ok"), "existing content preserved: {fixed}");
     }
 }

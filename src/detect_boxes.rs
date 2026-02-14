@@ -56,17 +56,56 @@ fn is_right_edge_char(ch: char) -> bool {
     matches!(ch, '│' | '├' | '┤' | '┼')
 }
 
+/// Returns true if `ch` is a valid single-line TR scan terminator
+/// (connects left+down, does NOT connect right).
+fn is_single_tr_end(ch: char) -> bool {
+    matches!(ch, '┐' | '┤')
+}
+
+/// Returns true if `ch` is a valid single-line BL scan terminator
+/// (connects up+right, does NOT connect down).
+fn is_single_bl_end(ch: char) -> bool {
+    matches!(ch, '└' | '┴')
+}
+
+/// Returns true if `ch` is valid at the BR corner position
+/// (connects up+left).
+fn is_single_br(ch: char) -> bool {
+    matches!(ch, '┘' | '┤' | '┴' | '┼')
+}
+
+/// Returns true if `ch` is a valid double-line TR scan terminator.
+fn is_double_tr_end(ch: char) -> bool {
+    matches!(ch, '╗' | '╣')
+}
+
+/// Returns true if `ch` is a valid double-line BL scan terminator.
+fn is_double_bl_end(ch: char) -> bool {
+    matches!(ch, '╚' | '╩')
+}
+
+/// Returns true if `ch` is valid at the double BR corner position.
+fn is_double_br(ch: char) -> bool {
+    matches!(ch, '╝' | '╣' | '╩' | '╬')
+}
+
+/// Returns true if `ch` is an arrow tip that can appear on a box edge
+/// where a connection enters or leaves the box.
+fn is_arrow_tip(ch: char) -> bool {
+    matches!(ch, '▲' | '▼' | '►' | '◄' | '△' | '▽' | '▷' | '◁')
+}
+
 /// Try to detect a single-line box starting at top-left corner (r, c) which
 /// must contain '┌'.
 fn try_detect_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> Option<Node> {
     let cols = grid.cols();
     let rows = grid.rows();
 
-    // Scan right along top edge to find ┐
+    // Scan right along top edge to find ┐ or junction that terminates the edge
     let mut c2 = c + 1;
     while c2 < cols {
         let ch = grid.get(r, c2)?;
-        if ch == '┐' {
+        if is_single_tr_end(ch) {
             break;
         }
         if !is_top_edge_char(ch) {
@@ -74,7 +113,7 @@ fn try_detect_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> Option
         }
         c2 += 1;
     }
-    if c2 >= cols || grid.get(r, c2)? != '┐' {
+    if c2 >= cols || !grid.get(r, c2).is_some_and(is_single_tr_end) {
         return None;
     }
     // Must be at least width 3 (corners + 1 edge char) to avoid degenerate
@@ -82,11 +121,11 @@ fn try_detect_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> Option
         return None;
     }
 
-    // Scan down from top-left to find └
+    // Scan down from top-left to find └ or junction that terminates the edge
     let mut r2 = r + 1;
     while r2 < rows {
         let ch = grid.get(r2, c)?;
-        if ch == '└' {
+        if is_single_bl_end(ch) {
             break;
         }
         if !is_left_edge_char(ch) {
@@ -94,7 +133,7 @@ fn try_detect_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> Option
         }
         r2 += 1;
     }
-    if r2 >= rows || grid.get(r2, c)? != '└' {
+    if r2 >= rows || !grid.get(r2, c).is_some_and(is_single_bl_end) {
         return None;
     }
     // Must be at least height 3
@@ -102,23 +141,23 @@ fn try_detect_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> Option
         return None;
     }
 
-    // Verify bottom-right corner is ┘
-    if grid.get(r2, c2)? != '┘' {
+    // Verify bottom-right corner connects up+left
+    if !grid.get(r2, c2).is_some_and(is_single_br) {
         return None;
     }
 
-    // Verify bottom edge
+    // Verify bottom edge (allow arrow tips as connection points)
     for col in (c + 1)..c2 {
         let ch = grid.get(r2, col)?;
-        if !is_bottom_edge_char(ch) {
+        if !is_bottom_edge_char(ch) && !is_arrow_tip(ch) {
             return None;
         }
     }
 
-    // Verify right edge
+    // Verify right edge (tolerate spaces from short lines)
     for row in (r + 1)..r2 {
         let ch = grid.get(row, c2)?;
-        if !is_right_edge_char(ch) {
+        if !is_right_edge_char(ch) && ch != ' ' {
             return None;
         }
     }
@@ -159,11 +198,11 @@ fn try_detect_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> Option
     let cols = grid.cols();
     let rows = grid.rows();
 
-    // Scan right for ╗
+    // Scan right for ╗ or junction terminator
     let mut c2 = c + 1;
     while c2 < cols {
         let ch = grid.get(r, c2)?;
-        if ch == '╗' {
+        if is_double_tr_end(ch) {
             break;
         }
         if !is_double_top_edge(ch) {
@@ -171,18 +210,18 @@ fn try_detect_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> Option
         }
         c2 += 1;
     }
-    if c2 >= cols || grid.get(r, c2)? != '╗' {
+    if c2 >= cols || !grid.get(r, c2).is_some_and(is_double_tr_end) {
         return None;
     }
     if c2 <= c + 1 {
         return None;
     }
 
-    // Scan down for ╚
+    // Scan down for ╚ or junction terminator
     let mut r2 = r + 1;
     while r2 < rows {
         let ch = grid.get(r2, c)?;
-        if ch == '╚' {
+        if is_double_bl_end(ch) {
             break;
         }
         if !is_double_left_edge(ch) {
@@ -190,30 +229,30 @@ fn try_detect_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> Option
         }
         r2 += 1;
     }
-    if r2 >= rows || grid.get(r2, c)? != '╚' {
+    if r2 >= rows || !grid.get(r2, c).is_some_and(is_double_bl_end) {
         return None;
     }
     if r2 <= r + 1 {
         return None;
     }
 
-    // Verify ╝
-    if grid.get(r2, c2)? != '╝' {
+    // Verify BR connects up+left
+    if !grid.get(r2, c2).is_some_and(is_double_br) {
         return None;
     }
 
-    // Bottom edge
+    // Bottom edge (allow arrow tips)
     for col in (c + 1)..c2 {
         let ch = grid.get(r2, col)?;
-        if !is_double_bottom_edge(ch) {
+        if !is_double_bottom_edge(ch) && !is_arrow_tip(ch) {
             return None;
         }
     }
 
-    // Right edge
+    // Right edge (tolerate spaces from short lines)
     for row in (r + 1)..r2 {
         let ch = grid.get(row, c2)?;
-        if !is_double_right_edge(ch) {
+        if !is_double_right_edge(ch) && ch != ' ' {
             return None;
         }
     }

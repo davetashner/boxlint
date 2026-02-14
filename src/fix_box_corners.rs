@@ -998,4 +998,12 @@ mod tests {
         let grid = input_to_mut_grid("┌──┐\n│   \n└──┘");
         assert!(!edges_are_fixable(&grid, 0, 0, 2, 3));
     }
+
+    #[test]
+    fn edges_are_fixable_rejects_right_edge_misalignment() {
+        // Right edge has space but adjacent col has │ → off-by-one misalignment
+        let grid = input_to_mut_grid("┌──┐─\n│  │─\n│   │\n└──┘─");
+        // Box corners at (0,0)→(3,3). Row 2 has space at col 3, │ at col 4.
+        assert!(!edges_are_fixable(&grid, 0, 0, 3, 3));
+    }
 }

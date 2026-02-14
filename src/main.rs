@@ -6,6 +6,7 @@ pub mod fix_adjacent_boxes;
 pub mod fix_arrow_connect;
 pub mod fix_box_content;
 pub mod fix_box_corners;
+pub mod fix_junctions;
 pub mod grid;
 pub mod lint_adjacent_boxes;
 pub mod lint_arrow_connect;
@@ -282,6 +283,9 @@ impl RuleRegistry {
         registry
             .lint_rules
             .push(Box::new(crate::lint_arrow_connect::ArrowConnectLint));
+        registry
+            .fixers
+            .push(Box::new(crate::fix_junctions::JunctionCharacterFixer));
         registry
             .fixers
             .push(Box::new(crate::fix_box_corners::BoxCornerEdgeFixer));

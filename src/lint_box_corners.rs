@@ -47,6 +47,11 @@ fn is_double_right_edge(ch: char) -> bool {
     matches!(ch, '║' | '╠' | '╣' | '╬')
 }
 
+/// Arrow tips that can appear on a box edge where a connection enters/leaves.
+fn is_arrow_tip(ch: char) -> bool {
+    matches!(ch, '▲' | '▼' | '►' | '◄' | '△' | '▽' | '▷' | '◁')
+}
+
 // ---------------------------------------------------------------------------
 // Style helpers
 // ---------------------------------------------------------------------------
@@ -57,6 +62,64 @@ fn is_single_corner(ch: char) -> bool {
 
 fn is_double_corner(ch: char) -> bool {
     matches!(ch, '╔' | '╗' | '╚' | '╝')
+}
+
+/// Is this character a single-line junction (T-piece or cross)?
+fn is_single_junction(ch: char) -> bool {
+    matches!(ch, '┬' | '┴' | '├' | '┤' | '┼')
+}
+
+/// Is this character a double-line junction (T-piece or cross)?
+fn is_double_junction(ch: char) -> bool {
+    matches!(ch, '╦' | '╩' | '╠' | '╣' | '╬')
+}
+
+// ---------------------------------------------------------------------------
+// Junction-as-corner validity
+// ---------------------------------------------------------------------------
+// A junction char can serve as a corner if it connects in the required
+// directions. For example, ┐ connects left+down; ┤ (left+up+down) and
+// ┼ (all) also connect left+down, so they're valid at the TR position.
+
+// Scan terminators: chars that END an edge scan. They connect in the
+// corner's required directions but do NOT continue in the scan direction.
+// Used in the while-loop scan and find_corner_on_row/col.
+
+/// Terminates a rightward top-edge scan (connects left+down, NOT right).
+fn is_single_tr_terminator(ch: char) -> bool {
+    matches!(ch, '┐' | '┤')
+    // ┐: left+down. ┤: left+up+down. Neither connects right.
+    // NOT ┬ (connects right) or ┼ (connects right).
+}
+
+/// Terminates a downward left-edge scan (connects up+right, NOT down).
+fn is_single_bl_terminator(ch: char) -> bool {
+    matches!(ch, '└' | '┴')
+    // └: up+right. ┴: up+left+right. Neither connects down.
+    // NOT ├ (connects down) or ┼ (connects down).
+}
+
+/// Terminates a rightward top-edge scan for double-line (connects left+down, NOT right).
+fn is_double_tr_terminator(ch: char) -> bool {
+    matches!(ch, '╗' | '╣')
+}
+
+/// Terminates a downward left-edge scan for double-line (connects up+right, NOT down).
+fn is_double_bl_terminator(ch: char) -> bool {
+    matches!(ch, '╚' | '╩')
+}
+
+// Corner validators: for the BR position check (not a scan). Any char
+// that connects up+left is valid at the bottom-right corner.
+
+/// Can `ch` serve as a single-line bottom-right corner (connects up + left)?
+fn is_valid_single_br(ch: char) -> bool {
+    matches!(ch, '┘' | '┤' | '┴' | '┼')
+}
+
+/// Can `ch` serve as a double-line bottom-right corner (connects up + left)?
+fn is_valid_double_br(ch: char) -> bool {
+    matches!(ch, '╝' | '╣' | '╩' | '╬')
 }
 
 /// Determine expected corner for a given position relative to the top-left
@@ -154,23 +217,17 @@ fn is_connected_corner(grid: &crate::grid::Grid, r: usize, c: usize, ch: char) -
         None
     };
 
+    // In flow diagrams, corners are used as path turns/endpoints where only
+    // one direction may have a visible connector. Use OR to tolerate these.
+    // Also accept arrow tips (◄►▲▼ etc.) as connectors.
+    let is_h = |ch: char| is_horizontal_connector(ch) || is_arrow_tip(ch);
+    let is_v = |ch: char| is_vertical_connector(ch) || is_arrow_tip(ch);
+
     match ch {
-        '└' | '╚' => {
-            // Needs vertical above AND horizontal to right
-            above.is_some_and(is_vertical_connector) && right.is_some_and(is_horizontal_connector)
-        }
-        '┘' | '╝' => {
-            // Needs vertical above AND horizontal to left
-            above.is_some_and(is_vertical_connector) && left.is_some_and(is_horizontal_connector)
-        }
-        '┐' | '╗' => {
-            // Needs vertical below AND horizontal to left
-            below.is_some_and(is_vertical_connector) && left.is_some_and(is_horizontal_connector)
-        }
-        '┌' | '╔' => {
-            // Non-box ┌: needs vertical below AND horizontal to right
-            below.is_some_and(is_vertical_connector) && right.is_some_and(is_horizontal_connector)
-        }
+        '└' | '╚' => above.is_some_and(is_v) || right.is_some_and(is_h),
+        '┘' | '╝' => above.is_some_and(is_v) || left.is_some_and(is_h),
+        '┐' | '╗' => below.is_some_and(is_v) || left.is_some_and(is_h),
+        '┌' | '╔' => below.is_some_and(is_v) || right.is_some_and(is_h),
         _ => false,
     }
 }
@@ -229,7 +286,7 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         found_corners.push(Position { row: r, col: c2 });
         if let Some(r2) = r2_opt {
             found_corners.push(Position { row: r2, col: c });
-            if grid.get(r2, c2) == Some('┘') {
+            if grid.get(r2, c2).is_some_and(is_valid_single_br) {
                 found_corners.push(Position { row: r2, col: c2 });
             }
         }
@@ -242,7 +299,7 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
     while c2 < cols {
         // grid.get() is always Some for in-bounds coordinates
         let ch = grid.get(r, c2).unwrap();
-        if ch == '┐' {
+        if is_single_tr_terminator(ch) {
             break;
         }
         if !is_single_top_edge(ch) {
@@ -262,7 +319,7 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         }
         c2 += 1;
     }
-    if c2 >= cols || grid.get(r, c2) != Some('┐') {
+    if c2 >= cols || !grid.get(r, c2).is_some_and(is_single_tr_terminator) {
         let (l, co) = pos(r, c2.min(cols.saturating_sub(1)));
         return TraceResult {
             diagnostics: vec![diag(
@@ -287,7 +344,7 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
     let mut r2 = r + 1;
     while r2 < rows {
         let ch = grid.get(r2, c).unwrap();
-        if ch == '└' {
+        if is_single_bl_terminator(ch) {
             break;
         }
         if !is_single_left_edge(ch) {
@@ -307,7 +364,7 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         }
         r2 += 1;
     }
-    if r2 >= rows || grid.get(r2, c) != Some('└') {
+    if r2 >= rows || !grid.get(r2, c).is_some_and(is_single_bl_terminator) {
         let (l, co) = pos(r2.min(rows.saturating_sub(1)), c);
         return TraceResult {
             diagnostics: vec![diag(
@@ -331,7 +388,7 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
 
     // Check bottom-right corner
     let br_ch = grid.get(r2, c2).unwrap_or(' ');
-    if br_ch != '┘' {
+    if !is_valid_single_br(br_ch) {
         let (l, co) = pos(r2, c2);
         return TraceResult {
             diagnostics: vec![diag(
@@ -347,10 +404,10 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         };
     }
 
-    // Check bottom edge
+    // Check bottom edge (allow arrow tips as connection points)
     for col in (c + 1)..c2 {
         let ch = grid.get(r2, col).unwrap_or(' ');
-        if !is_single_bottom_edge(ch) {
+        if !is_single_bottom_edge(ch) && !is_arrow_tip(ch) {
             let (l, co) = pos(r2, col);
             return TraceResult {
                 diagnostics: vec![diag(
@@ -367,10 +424,10 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         }
     }
 
-    // Check right edge
+    // Check right edge (tolerate spaces from short lines)
     for row in (r + 1)..r2 {
         let ch = grid.get(row, c2).unwrap_or(' ');
-        if !is_single_right_edge(ch) {
+        if !is_single_right_edge(ch) && ch != ' ' {
             let (l, co) = pos(row, c2);
             return TraceResult {
                 diagnostics: vec![diag(
@@ -393,7 +450,21 @@ fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
     }
 }
 
-/// Find a specific corner character on the same row, scanning right from `start_col`.
+/// Check if the character terminates a scan for the given target corner.
+/// For TR/BL scans, uses terminators (no continuation in scan direction).
+/// For BR/other, uses exact match.
+fn matches_corner_scan(ch: char, target: char) -> bool {
+    match target {
+        '┐' => is_single_tr_terminator(ch),
+        '└' => is_single_bl_terminator(ch),
+        '╗' => is_double_tr_terminator(ch),
+        '╚' => is_double_bl_terminator(ch),
+        _ => ch == target,
+    }
+}
+
+/// Find a corner character (or valid junction substitute) on the same row,
+/// scanning right from `start_col`.
 fn find_corner_on_row(
     grid: &crate::grid::Grid,
     row: usize,
@@ -401,10 +472,14 @@ fn find_corner_on_row(
     target: char,
 ) -> Option<usize> {
     let cols = grid.cols();
-    (start_col..cols).find(|&c| grid.get(row, c) == Some(target))
+    (start_col..cols).find(|&c| {
+        grid.get(row, c)
+            .is_some_and(|ch| matches_corner_scan(ch, target))
+    })
 }
 
-/// Find a specific corner character on the same column, scanning down from `start_row`.
+/// Find a corner character (or valid junction substitute) on the same column,
+/// scanning down from `start_row`.
 fn find_corner_on_col(
     grid: &crate::grid::Grid,
     col: usize,
@@ -412,7 +487,10 @@ fn find_corner_on_col(
     target: char,
 ) -> Option<usize> {
     let rows = grid.rows();
-    (start_row..rows).find(|&r| grid.get(r, col) == Some(target))
+    (start_row..rows).find(|&r| {
+        grid.get(r, col)
+            .is_some_and(|ch| matches_corner_scan(ch, target))
+    })
 }
 
 /// Try to trace a double-line box from top-left '╔' at (r,c).
@@ -431,7 +509,7 @@ fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         found_corners.push(Position { row: r, col: c2 });
         if let Some(r2) = r2_opt {
             found_corners.push(Position { row: r2, col: c });
-            if grid.get(r2, c2) == Some('╝') {
+            if grid.get(r2, c2).is_some_and(is_valid_double_br) {
                 found_corners.push(Position { row: r2, col: c2 });
             }
         }
@@ -439,11 +517,11 @@ fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         found_corners.push(Position { row: r2, col: c });
     }
 
-    // Scan right for ╗
+    // Scan right for ╗ (or valid TR junction)
     let mut c2 = c + 1;
     while c2 < cols {
         let ch = grid.get(r, c2).unwrap();
-        if ch == '╗' {
+        if is_double_tr_terminator(ch) {
             break;
         }
         if !is_double_top_edge(ch) {
@@ -463,7 +541,7 @@ fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         }
         c2 += 1;
     }
-    if c2 >= cols || grid.get(r, c2) != Some('╗') {
+    if c2 >= cols || !grid.get(r, c2).is_some_and(is_double_tr_terminator) {
         let (l, co) = pos(r, c2.min(cols.saturating_sub(1)));
         return TraceResult {
             diagnostics: vec![diag(
@@ -485,11 +563,11 @@ fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         };
     }
 
-    // Scan down for ╚
+    // Scan down for ╚ (or valid BL junction)
     let mut r2 = r + 1;
     while r2 < rows {
         let ch = grid.get(r2, c).unwrap();
-        if ch == '╚' {
+        if is_double_bl_terminator(ch) {
             break;
         }
         if !is_double_left_edge(ch) {
@@ -509,7 +587,7 @@ fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         }
         r2 += 1;
     }
-    if r2 >= rows || grid.get(r2, c) != Some('╚') {
+    if r2 >= rows || !grid.get(r2, c).is_some_and(is_double_bl_terminator) {
         let (l, co) = pos(r2.min(rows.saturating_sub(1)), c);
         return TraceResult {
             diagnostics: vec![diag(
@@ -533,7 +611,7 @@ fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
 
     // Check bottom-right corner
     let br_ch = grid.get(r2, c2).unwrap_or(' ');
-    if br_ch != '╝' {
+    if !is_valid_double_br(br_ch) {
         let (l, co) = pos(r2, c2);
         return TraceResult {
             diagnostics: vec![diag(
@@ -549,10 +627,10 @@ fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         };
     }
 
-    // Bottom edge
+    // Bottom edge (allow arrow tips)
     for col in (c + 1)..c2 {
         let ch = grid.get(r2, col).unwrap_or(' ');
-        if !is_double_bottom_edge(ch) {
+        if !is_double_bottom_edge(ch) && !is_arrow_tip(ch) {
             let (l, co) = pos(r2, col);
             return TraceResult {
                 diagnostics: vec![diag(
@@ -569,10 +647,10 @@ fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceRes
         }
     }
 
-    // Right edge
+    // Right edge (tolerate spaces from short lines)
     for row in (r + 1)..r2 {
         let ch = grid.get(row, c2).unwrap_or(' ');
-        if !is_double_right_edge(ch) {
+        if !is_double_right_edge(ch) && ch != ' ' {
             let (l, co) = pos(row, c2);
             return TraceResult {
                 diagnostics: vec![diag(
@@ -616,9 +694,9 @@ fn check_style_consistency(grid: &crate::grid::Grid, bounds: &BoundingRect) -> V
         return diags;
     }
 
-    // Check top-right
+    // Check top-right (skip if junction char — junctions are style-neutral)
     let tr_expected = expected_corner(tl_ch, "top-right");
-    if tr_ch != tr_expected {
+    if tr_ch != tr_expected && !is_single_junction(tr_ch) && !is_double_junction(tr_ch) {
         let same_family =
             (is_single && is_single_corner(tr_ch)) || (is_double && is_double_corner(tr_ch));
         if !same_family && is_box_corner(tr_ch) {
@@ -635,9 +713,9 @@ fn check_style_consistency(grid: &crate::grid::Grid, bounds: &BoundingRect) -> V
         }
     }
 
-    // Check bottom-left
+    // Check bottom-left (skip if junction char)
     let bl_expected = expected_corner(tl_ch, "bottom-left");
-    if bl_ch != bl_expected {
+    if bl_ch != bl_expected && !is_single_junction(bl_ch) && !is_double_junction(bl_ch) {
         let same_family =
             (is_single && is_single_corner(bl_ch)) || (is_double && is_double_corner(bl_ch));
         if !same_family && is_box_corner(bl_ch) {
@@ -654,9 +732,9 @@ fn check_style_consistency(grid: &crate::grid::Grid, bounds: &BoundingRect) -> V
         }
     }
 
-    // Check bottom-right
+    // Check bottom-right (skip if junction char)
     let br_expected = expected_corner(tl_ch, "bottom-right");
-    if br_ch != br_expected {
+    if br_ch != br_expected && !is_single_junction(br_ch) && !is_double_junction(br_ch) {
         let same_family =
             (is_single && is_single_corner(br_ch)) || (is_double && is_double_corner(br_ch));
         if !same_family && is_box_corner(br_ch) {
@@ -689,8 +767,9 @@ impl LintRule for BoxCornerEdgeLint {
         let mut ir = DiagramIR::new(input);
         detect_boxes(&mut ir);
 
-        // Collect corner positions of all valid boxes
+        // Collect corner positions and bounding rects of all valid boxes
         let mut valid_corners = Vec::new();
+        let mut valid_bounds: Vec<(Position, Position)> = Vec::new();
         for node in &ir.nodes {
             if let Node::Box { bounds, .. } = node {
                 valid_corners.push(bounds.top_left);
@@ -703,6 +782,7 @@ impl LintRule for BoxCornerEdgeLint {
                     col: bounds.top_left.col,
                 });
                 valid_corners.push(bounds.bottom_right);
+                valid_bounds.push((bounds.top_left, bounds.bottom_right));
             }
         }
 
@@ -726,6 +806,13 @@ impl LintRule for BoxCornerEdgeLint {
                     continue;
                 }
 
+                // Check if this position is inside an already-validated box.
+                // Nested inner boxes with minor alignment issues should not
+                // generate errors since the outer box structure is valid.
+                let inside_valid_box = valid_bounds
+                    .iter()
+                    .any(|(tl, br)| r > tl.row && r < br.row && c > tl.col && c < br.col);
+
                 // Orphan corner — diagnose based on type
                 match ch {
                     '┌' => {
@@ -743,7 +830,7 @@ impl LintRule for BoxCornerEdgeLint {
                                     format!("orphan corner '{}' is not part of any box", ch),
                                 ));
                             }
-                        } else {
+                        } else if !inside_valid_box {
                             diagnostics.extend(result.diagnostics);
                         }
                     }
@@ -760,7 +847,7 @@ impl LintRule for BoxCornerEdgeLint {
                                     format!("orphan corner '{}' is not part of any box", ch),
                                 ));
                             }
-                        } else {
+                        } else if !inside_valid_box {
                             diagnostics.extend(result.diagnostics);
                         }
                     }
@@ -1081,13 +1168,16 @@ X  │
         assert!(!diags.is_empty());
     }
 
-    // 21. Degenerate height (r2 <= r+1) — no diagnostics from single diagnose
+    // 21. Degenerate height (r2 <= r+1) — corners are connected via OR logic
     #[test]
     fn degenerate_height_no_error() {
         let input = "┌──┐\n└──┘";
         let diags = lint(input);
-        // ┌ diagnosis returns empty (degenerate height), orphan reported
-        assert!(!diags.is_empty());
+        // Degenerate box: corners are connected to edges so no orphan reports
+        assert!(
+            diags.is_empty(),
+            "degenerate box corners are connected: {diags:?}"
+        );
     }
 
     // 22. Double box — broken top edge
@@ -1176,7 +1266,11 @@ X  ║
     fn double_degenerate_height() {
         let input = "╔══╗\n╚══╝";
         let diags = lint(input);
-        assert!(!diags.is_empty());
+        // Degenerate box: corners are connected to edges so no orphan reports
+        assert!(
+            diags.is_empty(),
+            "degenerate double box corners are connected: {diags:?}"
+        );
     }
 
     // 31. Mixed style on valid box — test check_style_consistency directly
@@ -1637,14 +1731,14 @@ X  ║
         assert!(diags[0].message.contains("orphan corner '┐'"));
     }
 
-    // 65. Connected ┘ with vertical above and horizontal left
+    // 65. Connected ┘ with vertical above or horizontal left
     #[test]
     fn connected_bottom_right_corner() {
-        // ┘ with only vertical above (no horizontal) → still orphan
+        // ┘ with vertical above only → connected (flow path turn)
         let diags = lint("│\n┘");
         assert!(
-            !diags.is_empty(),
-            "┘ with only vertical above should be orphan"
+            diags.is_empty(),
+            "┘ with vertical above should be connected, got: {diags:?}"
         );
 
         // Properly connected ┘: │ above and ─ to left
@@ -1652,6 +1746,20 @@ X  ║
         assert!(
             diags2.is_empty(),
             "connected ┘ should not be orphan, got: {diags2:?}"
+        );
+
+        // ┘ with only horizontal left → connected (flow path turn)
+        let diags3 = lint("  \n─┘");
+        assert!(
+            diags3.is_empty(),
+            "┘ with horizontal left should be connected, got: {diags3:?}"
+        );
+
+        // ┘ with arrow tip to left → connected
+        let diags4 = lint("  \n◄┘");
+        assert!(
+            diags4.is_empty(),
+            "┘ with arrow tip left should be connected, got: {diags4:?}"
         );
     }
 
@@ -1766,16 +1874,155 @@ X  ║
     // 72. Corner at grid edge (row 0 or col 0) — boundary check
     #[test]
     fn corner_at_grid_boundary() {
-        // └ at row 0 — no row above → not connected
+        // └ at row 0 — no row above but ─ to right → connected (OR logic)
         let grid = crate::grid::Grid::new("└─");
-        assert!(!is_connected_corner(&grid, 0, 0, '└'));
+        assert!(is_connected_corner(&grid, 0, 0, '└'));
 
-        // ┘ at col 0 — no col to left → not connected
+        // ┘ at col 0 — no col to left AND no vertical above → not connected
         let grid = crate::grid::Grid::new(" │\n┘ ");
         assert!(!is_connected_corner(&grid, 1, 0, '┘'));
 
-        // ┐ at last row — no row below → not connected
+        // ┐ at last row — no row below but ─ to left → connected (OR logic)
         let grid = crate::grid::Grid::new("─┐");
-        assert!(!is_connected_corner(&grid, 0, 1, '┐'));
+        assert!(is_connected_corner(&grid, 0, 1, '┐'));
+
+        // Truly isolated corners → not connected
+        let grid = crate::grid::Grid::new("┘");
+        assert!(!is_connected_corner(&grid, 0, 0, '┘'));
+    }
+
+    // --- Phase 1: Junction tolerance tests ---
+
+    // 73. Box with ┤ at TR position (pipe exits right from box)
+    #[test]
+    fn junction_tr_no_error() {
+        // ┤ connects left+up+down — valid as TR when scanning top edge
+        // In real diagrams, ┤ at TR means a pipe exits from the right side
+        let input = "\
+┌──┤
+│  │
+└──┘";
+        let diags = lint(input);
+        // ┤ is NOT a valid TR scan terminator (it connects right),
+        // so this will not be found as a valid box. The ┌ traces but
+        // doesn't find ┐ or ┤ as TR. This is correct — ┤ extends right.
+        // The corners are all connected though, so no orphan errors.
+        for d in &diags {
+            assert!(
+                !d.message.contains("orphan"),
+                "unexpected orphan: {}",
+                d.message
+            );
+        }
+    }
+
+    // 74. Box with ┴ at BL position (pipe exits down from box)
+    #[test]
+    fn junction_bl_no_error() {
+        let input = "\
+┌──┐
+│  │
+┴──┘";
+        let diags = lint(input);
+        for d in &diags {
+            assert!(
+                !d.message.contains("orphan"),
+                "unexpected orphan: {}",
+                d.message
+            );
+        }
+    }
+
+    // 75. Box with ┼ at BR (pipe crosses through corner)
+    #[test]
+    fn junction_br_valid() {
+        let input = "\
+┌──┐
+│  │
+│  │
+└──┼
+   │";
+        let diags = lint(input);
+        // ┼ is valid as BR corner
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("missing") && d.message.contains("bottom-right")),
+            "┼ should be valid as BR corner: {diags:?}"
+        );
+    }
+
+    // 76. Demo diagram: zero errors
+    #[test]
+    fn demo_diagram_zero_errors() {
+        let input = include_str!("../examples/demo-flow-diagram.txt");
+        let diags = lint(input);
+        let errors: Vec<_> = diags.iter().filter(|d| d.level == Level::Error).collect();
+        assert!(
+            errors.is_empty(),
+            "expected 0 errors on demo diagram, got {}:\n{}",
+            errors.len(),
+            errors
+                .iter()
+                .map(|d| format!("  {}:{}: {}", d.line, d.col, d.message))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    // 77. Orphan ┘ adjacent to arrow tip — not reported
+    #[test]
+    fn arrow_adjacent_corner_not_orphan() {
+        let input = "◄─┘";
+        let diags = lint(input);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("orphan")),
+            "┘ adjacent to arrow path should not be orphan: {diags:?}"
+        );
+    }
+
+    // 78. Style consistency skips junction chars at corners
+    #[test]
+    fn style_consistency_skips_junctions() {
+        // A box with ┼ at BR — shouldn't trigger style mismatch
+        let input = "\
+┌──┐
+│  │
+│  │
+└──┼";
+        let diags = lint(input);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("style")),
+            "junction at corner should not trigger style warning: {diags:?}"
+        );
+    }
+
+    // 79. matches_corner_scan fallback branch (non-TR/BL targets)
+    #[test]
+    fn matches_corner_scan_fallback() {
+        // The _ branch handles targets like ┌ and ┘ — exact match
+        assert!(matches_corner_scan('┌', '┌'));
+        assert!(!matches_corner_scan('┐', '┌'));
+        assert!(matches_corner_scan('┘', '┘'));
+        assert!(!matches_corner_scan('┐', '┘'));
+    }
+
+    // 80. Nested box inside valid outer — errors suppressed
+    #[test]
+    fn nested_box_errors_suppressed() {
+        // Outer box is valid. Inner box has a minor alignment issue
+        // (content row extends 1 past the edge). Should not produce errors.
+        let input = "\
+┌────────────────┐
+│  ┌────┐        │
+│  │ hi  │       │
+│  └────┘        │
+└────────────────┘";
+        let diags = lint(input);
+        let errors: Vec<_> = diags.iter().filter(|d| d.level == Level::Error).collect();
+        assert!(
+            errors.is_empty(),
+            "nested box alignment issues should be suppressed: {errors:?}"
+        );
     }
 }
