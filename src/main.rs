@@ -11,7 +11,10 @@ use std::process;
 // ---------------------------------------------------------------------------
 
 #[derive(Parser, Debug)]
-#[command(name = "boxlint", about = "Lint and auto-fix Unicode box-drawing diagrams")]
+#[command(
+    name = "boxlint",
+    about = "Lint and auto-fix Unicode box-drawing diagrams"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -110,6 +113,12 @@ pub trait Fixer {
 pub struct RuleRegistry {
     pub lint_rules: Vec<Box<dyn LintRule>>,
     pub fixers: Vec<Box<dyn Fixer>>,
+}
+
+impl Default for RuleRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RuleRegistry {
@@ -249,12 +258,7 @@ fn run_lint(
     }
 }
 
-fn run_fix(
-    path: Option<&str>,
-    in_place: bool,
-    _quiet: bool,
-    registry: &RuleRegistry,
-) -> i32 {
+fn run_fix(path: Option<&str>, in_place: bool, _quiet: bool, registry: &RuleRegistry) -> i32 {
     if in_place && path.is_none() {
         eprintln!("boxlint: --in-place requires a file argument");
         return 2;
@@ -395,9 +399,7 @@ mod tests {
     fn parse_fix_no_args() {
         let cli = Cli::try_parse_from(["boxlint", "fix"]).unwrap();
         match cli.command {
-            Command::Fix {
-                path, in_place, ..
-            } => {
+            Command::Fix { path, in_place, .. } => {
                 assert!(path.is_none());
                 assert!(!in_place);
             }
@@ -409,9 +411,7 @@ mod tests {
     fn parse_fix_in_place() {
         let cli = Cli::try_parse_from(["boxlint", "fix", "foo.txt", "-i"]).unwrap();
         match cli.command {
-            Command::Fix {
-                path, in_place, ..
-            } => {
+            Command::Fix { path, in_place, .. } => {
                 assert_eq!(path.as_deref(), Some("foo.txt"));
                 assert!(in_place);
             }
@@ -606,12 +606,7 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(
-            Some(file.to_str().unwrap()),
-            false,
-            false,
-            &registry,
-        );
+        let code = run_fix(Some(file.to_str().unwrap()), false, false, &registry);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -625,12 +620,7 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(
-            Some(file.to_str().unwrap()),
-            true,
-            false,
-            &registry,
-        );
+        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry);
         assert_eq!(code, 0);
         // With no fixers, content should be unchanged
         let content = fs::read_to_string(&file).unwrap();
