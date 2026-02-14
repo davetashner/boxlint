@@ -54,6 +54,14 @@ pub enum Command {
         /// Filename to use in diagnostics when reading from stdin
         #[arg(long)]
         stdin_filename: Option<String>,
+
+        /// Only run these rules (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        rule: Vec<String>,
+
+        /// Skip these rules (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        ignore: Vec<String>,
     },
     /// Auto-fix a file or stdin
     Fix {
@@ -83,6 +91,14 @@ pub enum Command {
         /// Filename to use in diagnostics when reading from stdin
         #[arg(long)]
         stdin_filename: Option<String>,
+
+        /// Only run these rules (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        rule: Vec<String>,
+
+        /// Skip these rules (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        ignore: Vec<String>,
     },
     /// Start MCP (Model Context Protocol) server over stdio
     #[cfg(feature = "mcp")]
@@ -191,6 +207,47 @@ impl RuleRegistry {
             .fixers
             .push(Box::new(crate::fix_arrow_connect::ArrowConnectFixer));
         registry
+    }
+
+    /// Collect all known rule and fixer names.
+    fn all_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.lint_rules.iter().map(|r| r.name()).collect();
+        for f in &self.fixers {
+            let n = f.name();
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+        names
+    }
+
+    /// Filter rules and fixers by `--rule` (include-only) or `--ignore` (exclude).
+    /// Returns exit code 2 on conflicting flags, or 0 on success.
+    /// Prints a warning to stderr for any unknown rule names.
+    pub fn filter(&mut self, rule: &[String], ignore: &[String]) -> i32 {
+        if !rule.is_empty() && !ignore.is_empty() {
+            eprintln!("boxlint: --rule and --ignore are mutually exclusive");
+            return 2;
+        }
+        let known = self.all_names();
+        // Validate names and warn about unknowns.
+        for name in rule.iter().chain(ignore.iter()) {
+            if !known.contains(&name.as_str()) {
+                eprintln!("boxlint: unknown rule '{name}'");
+            }
+        }
+        if !rule.is_empty() {
+            self.lint_rules
+                .retain(|r| rule.iter().any(|n| n == r.name()));
+            self.fixers.retain(|f| rule.iter().any(|n| n == f.name()));
+        }
+        if !ignore.is_empty() {
+            self.lint_rules
+                .retain(|r| !ignore.iter().any(|n| n == r.name()));
+            self.fixers
+                .retain(|f| !ignore.iter().any(|n| n == f.name()));
+        }
+        0
     }
 
     pub fn run_lint(&self, input: &str) -> Vec<Diagnostic> {
@@ -557,7 +614,7 @@ fn unified_diff(original: &str, modified: &str, filename: &str) -> String {
 #[cfg(not(tarpaulin_include))]
 fn main() {
     let cli = Cli::parse();
-    let registry = RuleRegistry::new();
+    let mut registry = RuleRegistry::new();
 
     let code = match &cli.command {
         Command::Lint {
@@ -565,13 +622,22 @@ fn main() {
             format,
             quiet,
             stdin_filename,
-        } => run_lint(
-            path.as_deref(),
-            format,
-            *quiet,
-            &registry,
-            stdin_filename.as_deref(),
-        ),
+            rule,
+            ignore,
+        } => {
+            let rc = registry.filter(rule, ignore);
+            if rc != 0 {
+                rc
+            } else {
+                run_lint(
+                    path.as_deref(),
+                    format,
+                    *quiet,
+                    &registry,
+                    stdin_filename.as_deref(),
+                )
+            }
+        }
         Command::Fix {
             path,
             in_place,
@@ -580,16 +646,25 @@ fn main() {
             format,
             diff,
             stdin_filename,
-        } => run_fix(
-            path.as_deref(),
-            *in_place,
-            *quiet,
-            &registry,
-            strip_prefix.as_deref(),
-            format,
-            *diff,
-            stdin_filename.as_deref(),
-        ),
+            rule,
+            ignore,
+        } => {
+            let rc = registry.filter(rule, ignore);
+            if rc != 0 {
+                rc
+            } else {
+                run_fix(
+                    path.as_deref(),
+                    *in_place,
+                    *quiet,
+                    &registry,
+                    strip_prefix.as_deref(),
+                    format,
+                    *diff,
+                    stdin_filename.as_deref(),
+                )
+            }
+        }
         #[cfg(feature = "mcp")]
         Command::Mcp => {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -622,11 +697,15 @@ mod tests {
                 format,
                 quiet,
                 stdin_filename,
+                rule,
+                ignore,
             } => {
                 assert!(path.is_none());
                 assert_eq!(format, OutputFormat::Text);
                 assert!(!quiet);
                 assert!(stdin_filename.is_none());
+                assert!(rule.is_empty());
+                assert!(ignore.is_empty());
             }
             _ => panic!("expected Lint command"),
         }
@@ -1613,5 +1692,182 @@ mod tests {
     fn unified_diff_deletion() {
         let result = unified_diff("a\nb\nc\n", "a\nc\n", "f.txt");
         assert!(result.contains("-b"));
+    }
+
+    // --rule / --ignore tests
+
+    #[test]
+    fn parse_lint_rule_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--rule", "box-corner-edge"]).unwrap();
+        match cli.command {
+            Command::Lint { rule, ignore, .. } => {
+                assert_eq!(rule, vec!["box-corner-edge"]);
+                assert!(ignore.is_empty());
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn parse_lint_rule_comma_separated() {
+        let cli =
+            Cli::try_parse_from(["boxlint", "lint", "--rule", "box-corner-edge,arrow-connect"])
+                .unwrap();
+        match cli.command {
+            Command::Lint { rule, .. } => {
+                assert_eq!(rule, vec!["box-corner-edge", "arrow-connect"]);
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn parse_lint_rule_repeated() {
+        let cli = Cli::try_parse_from([
+            "boxlint",
+            "lint",
+            "--rule",
+            "box-corner-edge",
+            "--rule",
+            "arrow-connect",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Lint { rule, .. } => {
+                assert_eq!(rule, vec!["box-corner-edge", "arrow-connect"]);
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn parse_lint_ignore_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--ignore", "arrow-connect"]).unwrap();
+        match cli.command {
+            Command::Lint { rule, ignore, .. } => {
+                assert!(rule.is_empty());
+                assert_eq!(ignore, vec!["arrow-connect"]);
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn parse_fix_rule_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "fix", "--rule", "box-content-sizing"]).unwrap();
+        match cli.command {
+            Command::Fix { rule, ignore, .. } => {
+                assert_eq!(rule, vec!["box-content-sizing"]);
+                assert!(ignore.is_empty());
+            }
+            _ => panic!("expected Fix command"),
+        }
+    }
+
+    #[test]
+    fn parse_fix_ignore_flag() {
+        let cli = Cli::try_parse_from([
+            "boxlint",
+            "fix",
+            "--ignore",
+            "box-corner-edge,adjacent-box-alignment",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Fix { ignore, .. } => {
+                assert_eq!(ignore, vec!["box-corner-edge", "adjacent-box-alignment"]);
+            }
+            _ => panic!("expected Fix command"),
+        }
+    }
+
+    #[test]
+    fn filter_rule_retains_only_matching() {
+        let mut registry = RuleRegistry::new();
+        let rc = registry.filter(&["box-corner-edge".to_string()], &[]);
+        assert_eq!(rc, 0);
+        assert_eq!(registry.lint_rules.len(), 1);
+        assert_eq!(registry.lint_rules[0].name(), "box-corner-edge");
+        assert_eq!(registry.fixers.len(), 1);
+        assert_eq!(registry.fixers[0].name(), "box-corner-edge");
+    }
+
+    #[test]
+    fn filter_ignore_removes_matching() {
+        let mut registry = RuleRegistry::new();
+        let original_lint_count = registry.lint_rules.len();
+        let original_fixer_count = registry.fixers.len();
+        let rc = registry.filter(&[], &["arrow-connect".to_string()]);
+        assert_eq!(rc, 0);
+        assert_eq!(registry.lint_rules.len(), original_lint_count - 1);
+        assert_eq!(registry.fixers.len(), original_fixer_count - 1);
+        assert!(registry
+            .lint_rules
+            .iter()
+            .all(|r| r.name() != "arrow-connect"));
+        assert!(registry.fixers.iter().all(|f| f.name() != "arrow-connect"));
+    }
+
+    #[test]
+    fn filter_rule_and_ignore_conflict() {
+        let mut registry = RuleRegistry::new();
+        let rc = registry.filter(
+            &["box-corner-edge".to_string()],
+            &["arrow-connect".to_string()],
+        );
+        assert_eq!(rc, 2);
+    }
+
+    #[test]
+    fn filter_empty_is_noop() {
+        let mut registry = RuleRegistry::new();
+        let lint_count = registry.lint_rules.len();
+        let fixer_count = registry.fixers.len();
+        let rc = registry.filter(&[], &[]);
+        assert_eq!(rc, 0);
+        assert_eq!(registry.lint_rules.len(), lint_count);
+        assert_eq!(registry.fixers.len(), fixer_count);
+    }
+
+    #[test]
+    fn filter_unknown_name_warns_but_succeeds() {
+        let mut registry = RuleRegistry::new();
+        let lint_count = registry.lint_rules.len();
+        // Unknown name should warn on stderr but still return 0
+        let rc = registry.filter(&["nonexistent-rule".to_string()], &[]);
+        assert_eq!(rc, 0);
+        // All rules filtered out since none match
+        assert_eq!(registry.lint_rules.len(), 0);
+        // Verify original had rules (sanity check)
+        assert!(lint_count > 0);
+    }
+
+    #[test]
+    fn filter_mixed_lint_and_fixer_names() {
+        // box-content-alignment is a lint name, box-content-sizing is a fixer name
+        let mut registry = RuleRegistry::new();
+        let rc = registry.filter(
+            &[
+                "box-content-alignment".to_string(),
+                "box-content-sizing".to_string(),
+            ],
+            &[],
+        );
+        assert_eq!(rc, 0);
+        assert_eq!(registry.lint_rules.len(), 1);
+        assert_eq!(registry.lint_rules[0].name(), "box-content-alignment");
+        assert_eq!(registry.fixers.len(), 1);
+        assert_eq!(registry.fixers[0].name(), "box-content-sizing");
+    }
+
+    #[test]
+    fn all_names_includes_both_lint_and_fixer() {
+        let registry = RuleRegistry::new();
+        let names = registry.all_names();
+        assert!(names.contains(&"box-corner-edge"));
+        assert!(names.contains(&"adjacent-box-alignment"));
+        assert!(names.contains(&"box-content-alignment"));
+        assert!(names.contains(&"arrow-connect"));
+        assert!(names.contains(&"box-content-sizing"));
     }
 }
