@@ -25,3 +25,4 @@ serde_json = "1"
 rmcp = { version = "0.15", features = ["server", "transport-io"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 schemars = { version = "1.0", optional = true }
+toml = "0.8"
