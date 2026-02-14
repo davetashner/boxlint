@@ -74,6 +74,10 @@ pub enum Command {
         /// Stop output after N diagnostics (exit code still reflects all)
         #[arg(long)]
         max_errors: Option<usize>,
+
+        /// Print a summary of diagnostic counts instead of individual diagnostics
+        #[arg(long)]
+        summary: bool,
     },
     /// Auto-fix a file or stdin
     Fix {
@@ -496,6 +500,7 @@ fn run_lint(
     fix: bool,
     in_place: bool,
     max_errors: Option<usize>,
+    summary: bool,
 ) -> i32 {
     if in_place && !fix {
         eprintln!("boxlint: --in-place requires --fix");
@@ -553,36 +558,73 @@ fn run_lint(
         all_diags.retain(|d| d.level == Level::Error);
     }
 
-    let total_count = all_diags.len();
-    let display_diags: &[Diagnostic] = if let Some(limit) = max_errors {
-        if all_diags.len() > limit {
-            &all_diags[..limit]
-        } else {
-            &all_diags
-        }
-    } else {
-        &all_diags
-    };
-
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
-    for diag in display_diags {
+
+    if summary {
+        let errors = all_diags.iter().filter(|d| d.level == Level::Error).count();
+        let warnings = all_diags
+            .iter()
+            .filter(|d| d.level == Level::Warning)
+            .count();
+        let files_checked = inputs.len();
+        let files_with_diags = all_diags
+            .iter()
+            .map(|d| &d.file)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
         match format {
             OutputFormat::Text => {
-                let _ = writeln!(stderr, "{diag}");
+                let e_label = if errors == 1 { "error" } else { "errors" };
+                let w_label = if warnings == 1 { "warning" } else { "warnings" };
+                let f_label = if files_with_diags == 1 {
+                    "file"
+                } else {
+                    "files"
+                };
+                let fc_label = if files_checked == 1 { "file" } else { "files" };
+                let _ = writeln!(
+                    stderr,
+                    "{errors} {e_label}, {warnings} {w_label} in {files_with_diags} {f_label} ({files_checked} {fc_label} checked)"
+                );
             }
             OutputFormat::Json => {
-                if let Ok(json) = serde_json::to_string(diag) {
-                    let _ = writeln!(stderr, "{json}");
+                let _ = writeln!(
+                    stderr,
+                    "{{\"files_checked\":{files_checked},\"files_with_diagnostics\":{files_with_diags},\"errors\":{errors},\"warnings\":{warnings}}}"
+                );
+            }
+        }
+    } else {
+        let total_count = all_diags.len();
+        let display_diags: &[Diagnostic] = if let Some(limit) = max_errors {
+            if all_diags.len() > limit {
+                &all_diags[..limit]
+            } else {
+                &all_diags
+            }
+        } else {
+            &all_diags
+        };
+
+        for diag in display_diags {
+            match format {
+                OutputFormat::Text => {
+                    let _ = writeln!(stderr, "{diag}");
+                }
+                OutputFormat::Json => {
+                    if let Ok(json) = serde_json::to_string(diag) {
+                        let _ = writeln!(stderr, "{json}");
+                    }
                 }
             }
         }
-    }
 
-    if let Some(limit) = max_errors {
-        if total_count > limit {
-            let suppressed = total_count - limit;
-            let _ = writeln!(stderr, "... and {suppressed} more diagnostics");
+        if let Some(limit) = max_errors {
+            if total_count > limit {
+                let suppressed = total_count - limit;
+                let _ = writeln!(stderr, "... and {suppressed} more diagnostics");
+            }
         }
     }
 
@@ -895,6 +937,7 @@ fn main() {
             fix,
             in_place,
             max_errors,
+            summary,
         } => {
             let merged_ignore = merge_ignore(rule, ignore, &config);
             let rc = registry.filter(rule, &merged_ignore);
@@ -910,6 +953,7 @@ fn main() {
                     *fix,
                     *in_place,
                     *max_errors,
+                    *summary,
                 )
             }
         }
@@ -998,6 +1042,7 @@ mod tests {
                 fix,
                 in_place,
                 max_errors,
+                summary,
             } => {
                 assert!(path.is_none());
                 assert_eq!(format, OutputFormat::Text);
@@ -1005,6 +1050,7 @@ mod tests {
                 assert!(stdin_filename.is_none());
                 assert!(rule.is_empty());
                 assert!(ignore.is_empty());
+                assert!(!summary);
                 assert!(!fix);
                 assert!(!in_place);
                 assert!(max_errors.is_none());
@@ -1182,6 +1228,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 0);
 
@@ -1200,6 +1247,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 2);
     }
@@ -1267,6 +1315,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 0);
 
@@ -1498,6 +1547,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1523,6 +1573,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1548,6 +1599,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1574,6 +1626,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1600,6 +1653,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1715,6 +1769,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 0);
 
@@ -2441,6 +2496,7 @@ mod tests {
             false,
             true,
             None,
+            false,
         );
         assert_eq!(code, 2);
     }
@@ -2457,6 +2513,7 @@ mod tests {
             true,
             true,
             None,
+            false,
         );
         assert_eq!(code, 2);
     }
@@ -2479,6 +2536,7 @@ mod tests {
             true,
             false,
             None,
+            false,
         );
         assert_eq!(code, 0);
 
@@ -2503,6 +2561,7 @@ mod tests {
             true,
             true,
             None,
+            false,
         );
         assert_eq!(code, 0);
         let content = fs::read_to_string(&file).unwrap();
@@ -2528,6 +2587,7 @@ mod tests {
             true,
             false,
             None,
+            false,
         );
         assert_eq!(code, 0);
 
@@ -2555,6 +2615,7 @@ mod tests {
             true,
             true,
             None,
+            false,
         );
         #[cfg(unix)]
         {
@@ -2784,6 +2845,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         // All 5 are errors, so exit code is 1
         assert_eq!(code, 1);
@@ -2809,6 +2871,7 @@ mod tests {
             false,
             false,
             Some(10),
+            false,
         );
         // 3 errors < limit of 10, exit code still 1
         assert_eq!(code, 1);
@@ -2835,6 +2898,7 @@ mod tests {
             false,
             false,
             Some(2),
+            false,
         );
         assert_eq!(code, 1);
 
@@ -2859,6 +2923,7 @@ mod tests {
             false,
             false,
             Some(2),
+            false,
         );
         assert_eq!(code, 1);
 
@@ -2883,6 +2948,7 @@ mod tests {
             false,
             false,
             Some(0),
+            false,
         );
         // Exit code still reflects all errors
         assert_eq!(code, 1);
@@ -2970,6 +3036,7 @@ mod tests {
             false,
             false,
             Some(3),
+            false,
         );
         assert_eq!(code, 1);
 
@@ -3168,6 +3235,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -3243,8 +3311,143 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -- Summary tests --
+
+    #[test]
+    fn parse_lint_summary_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--summary"]).unwrap();
+        match cli.command {
+            Command::Lint { summary, .. } => assert!(summary),
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn summary_text_with_errors_and_warnings() {
+        let dir = std::env::temp_dir().join("boxlint_test_summary_text");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(WarnAndErrorRule));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            None,
+            true,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn summary_json_with_errors_and_warnings() {
+        let dir = std::env::temp_dir().join("boxlint_test_summary_json");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(WarnAndErrorRule));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Json,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            None,
+            true,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn summary_with_quiet_only_counts_errors() {
+        let dir = std::env::temp_dir().join("boxlint_test_summary_quiet");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(WarnAndErrorRule));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            true,
+            &registry,
+            None,
+            false,
+            false,
+            None,
+            true,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn summary_no_diagnostics() {
+        let dir = std::env::temp_dir().join("boxlint_test_summary_none");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "clean content").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            None,
+            true,
+        );
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn summary_json_no_diagnostics() {
+        let dir = std::env::temp_dir().join("boxlint_test_summary_json_none");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "clean content").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Json,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            None,
+            true,
+        );
+        assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
     }
