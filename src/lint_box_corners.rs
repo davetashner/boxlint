@@ -101,7 +101,19 @@ fn edge_name(tl: char, which: &str) -> char {
 fn is_vertical_connector(ch: char) -> bool {
     matches!(
         ch,
-        '│' | '├' | '┤' | '┼' | '┌' | '┐' | '╔' | '╗' | '║' | '╠' | '╣' | '╬' | '┬' | '┴'
+        '│' | '├'
+            | '┤'
+            | '┼'
+            | '┌'
+            | '┐'
+            | '╔'
+            | '╗'
+            | '║'
+            | '╠'
+            | '╣'
+            | '╬'
+            | '┬'
+            | '┴'
     )
 }
 
@@ -109,7 +121,19 @@ fn is_vertical_connector(ch: char) -> bool {
 fn is_horizontal_connector(ch: char) -> bool {
     matches!(
         ch,
-        '─' | '┴' | '┬' | '┼' | '└' | '┘' | '╚' | '╝' | '═' | '╩' | '╦' | '╬' | '├' | '┤'
+        '─' | '┴'
+            | '┬'
+            | '┼'
+            | '└'
+            | '┘'
+            | '╚'
+            | '╝'
+            | '═'
+            | '╩'
+            | '╦'
+            | '╬'
+            | '├'
+            | '┤'
     )
 }
 
@@ -133,23 +157,19 @@ fn is_connected_corner(grid: &crate::grid::Grid, r: usize, c: usize, ch: char) -
     match ch {
         '└' | '╚' => {
             // Needs vertical above AND horizontal to right
-            above.is_some_and(is_vertical_connector)
-                && right.is_some_and(is_horizontal_connector)
+            above.is_some_and(is_vertical_connector) && right.is_some_and(is_horizontal_connector)
         }
         '┘' | '╝' => {
             // Needs vertical above AND horizontal to left
-            above.is_some_and(is_vertical_connector)
-                && left.is_some_and(is_horizontal_connector)
+            above.is_some_and(is_vertical_connector) && left.is_some_and(is_horizontal_connector)
         }
         '┐' | '╗' => {
             // Needs vertical below AND horizontal to left
-            below.is_some_and(is_vertical_connector)
-                && left.is_some_and(is_horizontal_connector)
+            below.is_some_and(is_vertical_connector) && left.is_some_and(is_horizontal_connector)
         }
         '┌' | '╔' => {
             // Non-box ┌: needs vertical below AND horizontal to right
-            below.is_some_and(is_vertical_connector)
-                && right.is_some_and(is_horizontal_connector)
+            below.is_some_and(is_vertical_connector) && right.is_some_and(is_horizontal_connector)
         }
         _ => false,
     }
@@ -1568,7 +1588,10 @@ X  ║
 │       │
 └───┴───┘";
         let diags = lint(input);
-        assert!(diags.is_empty(), "expected no diagnostics for merge line, got: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for merge line, got: {diags:?}"
+        );
     }
 
     // 62. Split line: ┌───┬───┐ with │ below
@@ -1580,7 +1603,10 @@ X  ║
         // A merge line (non-top-left corners) should produce zero diagnostics
         let input = "│       │\n└───┴───┘";
         let diags = lint(input);
-        assert!(diags.is_empty(), "expected no diagnostics for merge line, got: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for merge line, got: {diags:?}"
+        );
 
         // A split line with ┌ still reports box-trace errors for ┌
         // but ┐ is accounted for by the prescan
@@ -1616,18 +1642,27 @@ X  ║
     fn connected_bottom_right_corner() {
         // ┘ with only vertical above (no horizontal) → still orphan
         let diags = lint("│\n┘");
-        assert!(!diags.is_empty(), "┘ with only vertical above should be orphan");
+        assert!(
+            !diags.is_empty(),
+            "┘ with only vertical above should be orphan"
+        );
 
         // Properly connected ┘: │ above and ─ to left
         let diags2 = lint(" │\n─┘");
-        assert!(diags2.is_empty(), "connected ┘ should not be orphan, got: {diags2:?}");
+        assert!(
+            diags2.is_empty(),
+            "connected ┘ should not be orphan, got: {diags2:?}"
+        );
     }
 
     // 66. Connected ┐ with vertical below and horizontal left
     #[test]
     fn connected_top_right_corner() {
         let diags = lint("─┐\n │");
-        assert!(diags.is_empty(), "connected ┐ should not be orphan, got: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "connected ┐ should not be orphan, got: {diags:?}"
+        );
     }
 
     // 67. is_connected_corner direct tests
