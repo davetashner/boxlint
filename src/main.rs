@@ -78,6 +78,10 @@ pub enum Command {
         /// Print a summary of diagnostic counts instead of individual diagnostics
         #[arg(long)]
         summary: bool,
+
+        /// Additional file extensions to include when scanning directories (comma-separated)
+        #[arg(long = "ext", value_delimiter = ',')]
+        extra_extensions: Vec<String>,
     },
     /// Auto-fix a file or stdin
     Fix {
@@ -115,6 +119,10 @@ pub enum Command {
         /// Skip these rules (comma-separated or repeated)
         #[arg(long, value_delimiter = ',')]
         ignore: Vec<String>,
+
+        /// Additional file extensions to include when scanning directories (comma-separated)
+        #[arg(long = "ext", value_delimiter = ',')]
+        extra_extensions: Vec<String>,
     },
     /// Check a file or stdin silently (exit 0 = clean, exit 1 = issues)
     Check {
@@ -136,6 +144,10 @@ pub enum Command {
         /// Stop output after N diagnostics (exit code still reflects all)
         #[arg(long)]
         max_errors: Option<usize>,
+
+        /// Additional file extensions to include when scanning directories (comma-separated)
+        #[arg(long = "ext", value_delimiter = ',')]
+        extra_extensions: Vec<String>,
     },
     /// Start MCP (Model Context Protocol) server over stdio
     #[cfg(feature = "mcp")]
@@ -365,7 +377,14 @@ fn read_stdin() -> io::Result<String> {
     Ok(buf)
 }
 
-fn collect_files(path: &str) -> io::Result<Vec<String>> {
+const DEFAULT_EXTENSIONS: &[&str] = &["txt", "md", "markdown", "rst", "adoc", "textile", "wiki"];
+
+fn has_box_drawing_chars(data: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(data);
+    text.chars().any(|c| ('\u{2500}'..='\u{257F}').contains(&c))
+}
+
+fn collect_files(path: &str, extra_extensions: &[String]) -> io::Result<Vec<String>> {
     let p = Path::new(path);
     if p.is_dir() {
         let mut files = Vec::new();
@@ -373,11 +392,28 @@ fn collect_files(path: &str) -> io::Result<Vec<String>> {
             let entry = entry?;
             let entry_path = entry.path();
             if entry_path.is_file() {
-                if let Some(ext) = entry_path.extension() {
-                    if ext == "txt" {
-                        if let Some(s) = entry_path.to_str() {
-                            files.push(s.to_string());
+                let include = if let Some(ext) = entry_path.extension() {
+                    let ext_lower = ext.to_string_lossy().to_lowercase();
+                    DEFAULT_EXTENSIONS.iter().any(|e| *e == ext_lower)
+                        || extra_extensions
+                            .iter()
+                            .any(|e| e.to_lowercase() == ext_lower)
+                } else {
+                    match fs::read(&entry_path) {
+                        Ok(data) => {
+                            let check = if data.len() > 8192 {
+                                &data[..8192]
+                            } else {
+                                &data
+                            };
+                            has_box_drawing_chars(check)
                         }
+                        Err(_) => false,
+                    }
+                };
+                if include {
+                    if let Some(s) = entry_path.to_str() {
+                        files.push(s.to_string());
                     }
                 }
             }
@@ -449,13 +485,14 @@ fn merge_ignore(cli_rule: &[String], cli_ignore: &[String], config: &Config) -> 
 fn load_inputs(
     path: Option<&str>,
     stdin_filename: Option<&str>,
+    extra_extensions: &[String],
 ) -> Result<Vec<(String, String)>, i32> {
     if path.is_some() && stdin_filename.is_some() {
         eprintln!("boxlint: --stdin-filename cannot be used with a file argument");
         return Err(2);
     }
     match path {
-        Some(p) => load_file_inputs(p),
+        Some(p) => load_file_inputs(p, extra_extensions),
         None => {
             let name = stdin_filename.unwrap_or("<stdin>").to_string();
             match read_stdin() {
@@ -469,8 +506,8 @@ fn load_inputs(
     }
 }
 
-fn load_file_inputs(p: &str) -> Result<Vec<(String, String)>, i32> {
-    let files = match collect_files(p) {
+fn load_file_inputs(p: &str, extra_extensions: &[String]) -> Result<Vec<(String, String)>, i32> {
+    let files = match collect_files(p, extra_extensions) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("boxlint: {e}");
@@ -501,6 +538,7 @@ fn run_lint(
     in_place: bool,
     max_errors: Option<usize>,
     summary: bool,
+    extra_extensions: &[String],
 ) -> i32 {
     if in_place && !fix {
         eprintln!("boxlint: --in-place requires --fix");
@@ -511,7 +549,7 @@ fn run_lint(
         return 2;
     }
 
-    let inputs = match load_inputs(path, stdin_filename) {
+    let inputs = match load_inputs(path, stdin_filename, extra_extensions) {
         Ok(inputs) => inputs,
         Err(code) => return code,
     };
@@ -678,8 +716,9 @@ fn run_check(
     registry: &RuleRegistry,
     stdin_filename: Option<&str>,
     max_errors: Option<usize>,
+    extra_extensions: &[String],
 ) -> i32 {
-    let inputs = match load_inputs(path, stdin_filename) {
+    let inputs = match load_inputs(path, stdin_filename, extra_extensions) {
         Ok(inputs) => inputs,
         Err(code) => return code,
     };
@@ -738,6 +777,7 @@ fn run_fix(
     format: &OutputFormat,
     diff: bool,
     stdin_filename: Option<&str>,
+    extra_extensions: &[String],
 ) -> i32 {
     if in_place && path.is_none() {
         eprintln!("boxlint: --in-place requires a file argument");
@@ -748,7 +788,7 @@ fn run_fix(
         return 2;
     }
 
-    let inputs = match load_inputs(path, stdin_filename) {
+    let inputs = match load_inputs(path, stdin_filename, extra_extensions) {
         Ok(inputs) => inputs,
         Err(code) => return code,
     };
@@ -938,6 +978,7 @@ fn main() {
             in_place,
             max_errors,
             summary,
+            extra_extensions,
         } => {
             let merged_ignore = merge_ignore(rule, ignore, &config);
             let rc = registry.filter(rule, &merged_ignore);
@@ -954,6 +995,7 @@ fn main() {
                     *in_place,
                     *max_errors,
                     *summary,
+                    extra_extensions,
                 )
             }
         }
@@ -967,6 +1009,7 @@ fn main() {
             stdin_filename,
             rule,
             ignore,
+            extra_extensions,
         } => {
             let merged_ignore = merge_ignore(rule, ignore, &config);
             let rc = registry.filter(rule, &merged_ignore);
@@ -982,6 +1025,7 @@ fn main() {
                     format,
                     *diff,
                     stdin_filename.as_deref(),
+                    extra_extensions,
                 )
             }
         }
@@ -991,6 +1035,7 @@ fn main() {
             rule,
             ignore,
             max_errors,
+            extra_extensions,
         } => {
             let merged_ignore = merge_ignore(rule, ignore, &config);
             let rc = registry.filter(rule, &merged_ignore);
@@ -1002,6 +1047,7 @@ fn main() {
                     &registry,
                     stdin_filename.as_deref(),
                     *max_errors,
+                    extra_extensions,
                 )
             }
         }
@@ -1043,8 +1089,10 @@ mod tests {
                 in_place,
                 max_errors,
                 summary,
+                extra_extensions,
             } => {
                 assert!(path.is_none());
+                assert!(extra_extensions.is_empty());
                 assert_eq!(format, OutputFormat::Text);
                 assert!(!quiet);
                 assert!(stdin_filename.is_none());
@@ -1229,6 +1277,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1248,6 +1297,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 2);
     }
@@ -1264,6 +1314,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 2);
     }
@@ -1280,6 +1331,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 2);
     }
@@ -1316,6 +1368,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1339,6 +1392,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1362,6 +1416,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
         let content = fs::read_to_string(&file).unwrap();
@@ -1378,7 +1433,7 @@ mod tests {
         fs::write(dir.join("b.rs"), "").unwrap();
         fs::write(dir.join("c.txt"), "").unwrap();
 
-        let files = collect_files(dir.to_str().unwrap()).unwrap();
+        let files = collect_files(dir.to_str().unwrap(), &[]).unwrap();
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|f| f.ends_with(".txt")));
 
@@ -1548,6 +1603,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -1574,6 +1630,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -1600,6 +1657,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -1627,6 +1685,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -1654,6 +1713,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -1678,6 +1738,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1703,6 +1764,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1728,6 +1790,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
         let content = fs::read_to_string(&file).unwrap();
@@ -1744,7 +1807,7 @@ mod tests {
         let file = dir.join("single.txt");
         fs::write(&file, "").unwrap();
 
-        let files = collect_files(file.to_str().unwrap()).unwrap();
+        let files = collect_files(file.to_str().unwrap(), &[]).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0], file.to_str().unwrap());
 
@@ -1770,6 +1833,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1793,6 +1857,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1809,7 +1874,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o000));
         }
-        let result = load_file_inputs(dir.to_str().unwrap());
+        let result = load_file_inputs(dir.to_str().unwrap(), &[]);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1823,7 +1888,7 @@ mod tests {
     // Coverage: load_file_inputs read_to_string error
     #[test]
     fn load_file_inputs_read_error() {
-        let result = load_file_inputs("/nonexistent/path/to/file.txt");
+        let result = load_file_inputs("/nonexistent/path/to/file.txt", &[]);
         assert_eq!(result, Err(2));
     }
 
@@ -1850,6 +1915,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         // Restore permissions for cleanup
         #[cfg(unix)]
@@ -1880,6 +1946,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1943,6 +2010,7 @@ mod tests {
             &OutputFormat::Text,
             true,
             None,
+            &[],
         );
         assert_eq!(code, 2);
     }
@@ -1964,6 +2032,7 @@ mod tests {
             &OutputFormat::Text,
             true,
             None,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -1988,6 +2057,7 @@ mod tests {
             &OutputFormat::Text,
             true,
             None,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -2023,6 +2093,7 @@ mod tests {
             &OutputFormat::Json,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -2047,6 +2118,7 @@ mod tests {
             &OutputFormat::Json,
             false,
             None,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -2290,10 +2362,12 @@ mod tests {
                 rule,
                 ignore,
                 max_errors,
+                extra_extensions,
             } => {
                 assert!(path.is_none());
                 assert!(stdin_filename.is_none());
                 assert!(rule.is_empty());
+                assert!(extra_extensions.is_empty());
                 assert!(ignore.is_empty());
                 assert!(max_errors.is_none());
             }
@@ -2348,7 +2422,7 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2363,7 +2437,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(ErrorRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2372,7 +2446,13 @@ mod tests {
     #[test]
     fn check_file_not_found_returns_two() {
         let registry = RuleRegistry::new();
-        let code = run_check(Some("/nonexistent/path/to/file.txt"), &registry, None, None);
+        let code = run_check(
+            Some("/nonexistent/path/to/file.txt"),
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 2);
     }
 
@@ -2384,7 +2464,7 @@ mod tests {
         fs::write(dir.join("b.txt"), "world").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(dir.to_str().unwrap()), &registry, None, None);
+        let code = run_check(Some(dir.to_str().unwrap()), &registry, None, None, &[]);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2399,7 +2479,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(ErrorRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2413,7 +2493,7 @@ mod tests {
         fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2446,7 +2526,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(WarnOnlyRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2497,6 +2577,7 @@ mod tests {
             true,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 2);
     }
@@ -2514,6 +2595,7 @@ mod tests {
             true,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 2);
     }
@@ -2537,6 +2619,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -2562,6 +2645,7 @@ mod tests {
             true,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 0);
         let content = fs::read_to_string(&file).unwrap();
@@ -2588,6 +2672,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -2616,6 +2701,7 @@ mod tests {
             true,
             None,
             false,
+            &[],
         );
         #[cfg(unix)]
         {
@@ -2846,6 +2932,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         // All 5 are errors, so exit code is 1
         assert_eq!(code, 1);
@@ -2872,6 +2959,7 @@ mod tests {
             false,
             Some(10),
             false,
+            &[],
         );
         // 3 errors < limit of 10, exit code still 1
         assert_eq!(code, 1);
@@ -2899,6 +2987,7 @@ mod tests {
             false,
             Some(2),
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -2924,6 +3013,7 @@ mod tests {
             false,
             Some(2),
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -2949,6 +3039,7 @@ mod tests {
             false,
             Some(0),
             false,
+            &[],
         );
         // Exit code still reflects all errors
         assert_eq!(code, 1);
@@ -2965,7 +3056,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(2));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(2), &[]);
         // Exit code still reflects all errors
         assert_eq!(code, 1);
 
@@ -2981,7 +3072,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(3)));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(10));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(10), &[]);
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2996,7 +3087,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -3011,7 +3102,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(1));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(1), &[]);
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -3037,6 +3128,7 @@ mod tests {
             false,
             Some(3),
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -3236,6 +3328,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -3312,6 +3405,7 @@ mod tests {
             false,
             None,
             false,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -3348,6 +3442,7 @@ mod tests {
             false,
             None,
             true,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -3373,6 +3468,7 @@ mod tests {
             false,
             None,
             true,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -3398,6 +3494,7 @@ mod tests {
             false,
             None,
             true,
+            &[],
         );
         assert_eq!(code, 1);
 
@@ -3422,6 +3519,7 @@ mod tests {
             false,
             None,
             true,
+            &[],
         );
         assert_eq!(code, 0);
 
@@ -3446,9 +3544,170 @@ mod tests {
             false,
             None,
             true,
+            &[],
         );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -- File type support tests --
+
+    #[test]
+    fn has_box_drawing_chars_true() {
+        assert!(has_box_drawing_chars("hello ┌──┐ world".as_bytes()));
+    }
+
+    #[test]
+    fn has_box_drawing_chars_false() {
+        assert!(!has_box_drawing_chars("plain text".as_bytes()));
+    }
+
+    #[test]
+    fn has_box_drawing_chars_empty() {
+        assert!(!has_box_drawing_chars(b""));
+    }
+
+    #[test]
+    fn default_extensions_list() {
+        assert!(DEFAULT_EXTENSIONS.contains(&"txt"));
+        assert!(DEFAULT_EXTENSIONS.contains(&"md"));
+        assert!(DEFAULT_EXTENSIONS.contains(&"rst"));
+        assert!(DEFAULT_EXTENSIONS.contains(&"adoc"));
+    }
+
+    #[test]
+    fn collect_files_includes_md_files() {
+        let dir = std::env::temp_dir().join("boxlint_test_collect_md");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("readme.md"), "# Hello").unwrap();
+        fs::write(dir.join("notes.rst"), "Notes").unwrap();
+        fs::write(dir.join("ignore.py"), "print()").unwrap();
+
+        let files = collect_files(dir.to_str().unwrap(), &[]).unwrap();
+        assert!(files.iter().any(|f| f.ends_with("readme.md")));
+        assert!(files.iter().any(|f| f.ends_with("notes.rst")));
+        assert!(!files.iter().any(|f| f.ends_with("ignore.py")));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_files_extra_extension() {
+        let dir = std::env::temp_dir().join("boxlint_test_collect_ext");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("diagram.puml"), "box").unwrap();
+
+        let files = collect_files(dir.to_str().unwrap(), &[]).unwrap();
+        assert!(!files.iter().any(|f| f.ends_with("diagram.puml")));
+
+        let files = collect_files(dir.to_str().unwrap(), &["puml".to_string()]).unwrap();
+        assert!(files.iter().any(|f| f.ends_with("diagram.puml")));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_files_extensionless_with_box_chars() {
+        let dir = std::env::temp_dir().join("boxlint_test_collect_noext");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("DIAGRAM"), "┌──┐\n│hi│\n└──┘\n").unwrap();
+        fs::write(dir.join("README"), "plain text only").unwrap();
+
+        let files = collect_files(dir.to_str().unwrap(), &[]).unwrap();
+        assert!(files.iter().any(|f| f.ends_with("DIAGRAM")));
+        assert!(!files.iter().any(|f| f.ends_with("README")));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_files_extensionless_large_file_with_box_chars() {
+        let dir = std::env::temp_dir().join("boxlint_test_collect_large_noext");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // Create a file > 8192 bytes with box-drawing chars near the start
+        let mut content = "┌──┐\n│hi│\n└──┘\n".to_string();
+        while content.len() < 9000 {
+            content.push_str("padding line of text\n");
+        }
+        fs::write(dir.join("BIGDIAGRAM"), &content).unwrap();
+
+        let files = collect_files(dir.to_str().unwrap(), &[]).unwrap();
+        assert!(files.iter().any(|f| f.ends_with("BIGDIAGRAM")));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_files_extensionless_unreadable() {
+        // Test with a directory that contains a file we can't read
+        // We use a path that doesn't trigger the read error on most systems,
+        // so we test the Err branch indirectly through a non-file
+        let dir = std::env::temp_dir().join("boxlint_test_collect_noext_err");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // Create an extensionless file and make it unreadable
+        let file = dir.join("NOREAD");
+        fs::write(&file, "some content").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o000));
+        }
+
+        let files = collect_files(dir.to_str().unwrap(), &[]).unwrap();
+        #[cfg(unix)]
+        assert!(!files.iter().any(|f| f.ends_with("NOREAD")));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o644));
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_lint_ext_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--ext", "puml,plantuml"]).unwrap();
+        match cli.command {
+            Command::Lint {
+                extra_extensions, ..
+            } => {
+                assert_eq!(extra_extensions, vec!["puml", "plantuml"]);
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn parse_fix_ext_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "fix", "--ext", "puml"]).unwrap();
+        match cli.command {
+            Command::Fix {
+                extra_extensions, ..
+            } => {
+                assert_eq!(extra_extensions, vec!["puml"]);
+            }
+            _ => panic!("expected Fix command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_ext_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "check", "--ext", "puml"]).unwrap();
+        match cli.command {
+            Command::Check {
+                extra_extensions, ..
+            } => {
+                assert_eq!(extra_extensions, vec!["puml"]);
+            }
+            _ => panic!("expected Check command"),
+        }
     }
 }
