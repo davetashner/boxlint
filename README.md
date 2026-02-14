@@ -3,6 +3,7 @@
 A linter and auto-fixer for Unicode box-drawing diagrams.
 
 [![CI](https://github.com/davetashner/boxlint/actions/workflows/ci.yml/badge.svg)](https://github.com/davetashner/boxlint/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/davetashner/boxlint/graph/badge.svg)](https://codecov.io/gh/davetashner/boxlint)
 
 ## Usage
 
@@ -10,6 +11,39 @@ A linter and auto-fixer for Unicode box-drawing diagrams.
 boxlint lint diagram.txt       # Print diagnostics
 boxlint fix diagram.txt        # Auto-fix to stdout
 boxlint fix diagram.txt -i     # Auto-fix in place
+```
+
+## Example
+
+**Before** — a diagram with alignment issues:
+
+```
+┌──────────┐
+│  Service │
+└──────────┘
+       │
+       ▼
+  ┌────────────┐     ┌──────────┐
+  │  Database   │────►│  Cache  │
+  └────────────┘     └──────────┘
+```
+
+Problems:
+- The arrow from "Service" is not centered under the box
+- "Database" box edge widths don't match the content
+- The horizontal arrow between boxes is misaligned vertically
+
+**After** — the same diagram, corrected:
+
+```
+┌──────────┐
+│  Service │
+└────┬─────┘
+     │
+     ▼
+┌──────────┐     ┌─────────┐
+│ Database │────►│  Cache  │
+└──────────┘     └─────────┘
 ```
 
 ## What it checks

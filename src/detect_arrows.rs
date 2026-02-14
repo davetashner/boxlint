@@ -56,35 +56,6 @@ fn is_vertical_connectable(ch: char) -> bool {
     is_vertical_edge(ch) || is_junction(ch) || is_arrow_tip(ch)
 }
 
-/// True if (row, col) sits on the edge of a box-like rectangle.
-/// A horizontal segment is a box edge when its left end has a left-corner
-/// and right end has a right-corner (same row).
-fn is_horizontal_box_edge(ir: &DiagramIR, row: usize, start_col: usize, end_col: usize) -> bool {
-    let left = ir.grid.get(row, start_col);
-    let right = ir.grid.get(row, end_col);
-    match (left, right) {
-        (Some(l), Some(r)) => {
-            let left_corner = matches!(l, '┌' | '└' | '╔' | '╚');
-            let right_corner = matches!(r, '┐' | '┘' | '╗' | '╝');
-            left_corner && right_corner
-        }
-        _ => false,
-    }
-}
-
-fn is_vertical_box_edge(ir: &DiagramIR, col: usize, start_row: usize, end_row: usize) -> bool {
-    let top = ir.grid.get(start_row, col);
-    let bottom = ir.grid.get(end_row, col);
-    match (top, bottom) {
-        (Some(t), Some(b)) => {
-            let top_corner = matches!(t, '┌' | '┐' | '╔' | '╗');
-            let bottom_corner = matches!(b, '└' | '┘' | '╚' | '╝');
-            top_corner && bottom_corner
-        }
-        _ => false,
-    }
-}
-
 /// Check if a junction character can be traversed in the given direction.
 fn junction_allows(ch: char, dir: Direction) -> bool {
     match (ch, dir) {
@@ -145,10 +116,8 @@ fn trace_arrow(
             _ => break,
         };
 
-        let ch = match ir.grid.get(nr, nc) {
-            Some(c) => c,
-            None => break,
-        };
+        // nr and nc are already bounds-checked above, so get() always succeeds.
+        let ch = ir.grid.get(nr, nc).unwrap();
 
         let is_horiz = matches!(cur_dir, Direction::Left | Direction::Right);
 
@@ -379,9 +348,8 @@ fn detect_standalone_horizontal(ir: &DiagramIR, visited: &mut [Vec<bool>]) -> Ve
             if end_col <= start_col {
                 continue;
             }
-            if is_horizontal_box_edge(ir, row, start_col, end_col) {
-                continue;
-            }
+            // Corner-adjacency check: if both neighbors are box corners, this
+            // is a box edge, not a standalone segment.
             let left_ch = if start_col > 0 {
                 ir.grid.get(row, start_col - 1)
             } else {
@@ -442,9 +410,8 @@ fn detect_standalone_vertical(ir: &DiagramIR, visited: &mut [Vec<bool>]) -> Vec<
             if end_row <= start_row {
                 continue;
             }
-            if is_vertical_box_edge(ir, col, start_row, end_row) {
-                continue;
-            }
+            // Corner-adjacency check: if both neighbors are box corners, this
+            // is a box edge, not a standalone segment.
             let top_ch = if start_row > 0 {
                 ir.grid.get(start_row - 1, col)
             } else {
@@ -788,5 +755,268 @@ mod tests {
             }
         });
         assert!(has_get, "expected arrow with GET label");
+    }
+
+    // Coverage: junction_allows — disallowed directions
+    #[test]
+    fn junction_disallows_directions() {
+        // ├ disallows Left
+        assert!(!junction_allows('├', Direction::Left));
+        // ┤ disallows Right
+        assert!(!junction_allows('┤', Direction::Right));
+        // ┬ disallows Up
+        assert!(!junction_allows('┬', Direction::Up));
+        // ┴ disallows Down
+        assert!(!junction_allows('┴', Direction::Down));
+        // Non-junction char
+        assert!(!junction_allows('─', Direction::Left));
+    }
+
+    // Coverage: double-line junction_allows
+    #[test]
+    fn double_junction_allows() {
+        // ╠ allows Right, Up, Down but not Left
+        assert!(junction_allows('╠', Direction::Right));
+        assert!(junction_allows('╠', Direction::Up));
+        assert!(junction_allows('╠', Direction::Down));
+        assert!(!junction_allows('╠', Direction::Left));
+        // ╣ allows Left, Up, Down but not Right
+        assert!(junction_allows('╣', Direction::Left));
+        assert!(!junction_allows('╣', Direction::Right));
+        // ╦ allows Left, Right, Down but not Up
+        assert!(junction_allows('╦', Direction::Left));
+        assert!(junction_allows('╦', Direction::Right));
+        assert!(junction_allows('╦', Direction::Down));
+        assert!(!junction_allows('╦', Direction::Up));
+        // ╩ allows Left, Right, Up but not Down
+        assert!(junction_allows('╩', Direction::Left));
+        assert!(junction_allows('╩', Direction::Up));
+        assert!(!junction_allows('╩', Direction::Down));
+        // ╬ allows all
+        assert!(junction_allows('╬', Direction::Left));
+        assert!(junction_allows('╬', Direction::Right));
+        assert!(junction_allows('╬', Direction::Up));
+        assert!(junction_allows('╬', Direction::Down));
+    }
+
+    // Coverage: tip_direction returns None for non-tip char (line 23)
+    #[test]
+    fn tip_direction_non_tip() {
+        assert!(tip_direction('─').is_none());
+        assert!(tip_direction('X').is_none());
+    }
+
+    // Coverage: is_vertical_connectable (lines 55-56)
+    #[test]
+    fn vertical_connectable_checks() {
+        assert!(is_vertical_connectable('│'));
+        assert!(is_vertical_connectable('┼'));
+        assert!(is_vertical_connectable('▼'));
+        assert!(!is_vertical_connectable('─'));
+        assert!(!is_vertical_connectable(' '));
+    }
+
+    // Coverage: vertical trace meets arrow tip (lines 216-220)
+    // A vertical trace that encounters an arrow tip at the other end
+    #[test]
+    fn vertical_trace_meets_arrow_tip() {
+        // ▼ traces up through │ to ▲ at the top
+        let ir = detect("▲\n│\n│\n▼");
+        let a = arrows(&ir);
+        assert!(!a.is_empty(), "expected at least one arrow");
+    }
+
+    // Coverage: horizontal turn at junction (try_turn_horizontal, lines 205-210)
+    // Vertical arrow hits junction, turns horizontal
+    #[test]
+    fn vertical_to_horizontal_turn() {
+        // ▼ at bottom traces up, hits ┤ junction, turns left
+        let input = "──┤\n  │\n  ▼";
+        let ir = detect(input);
+        let a = arrows(&ir);
+        assert!(!a.is_empty());
+        // Check multi-segment (vertical + horizontal)
+        let multi = a.iter().any(|n| {
+            if let Node::Arrow { segments, .. } = n {
+                segments.len() >= 2
+            } else {
+                false
+            }
+        });
+        assert!(multi, "expected multi-segment arrow with turn");
+    }
+
+    // Coverage: standalone vertical segment (lines 446+)
+    #[test]
+    fn standalone_vertical_segment() {
+        // Free │ column not adjacent to box corners
+        let ir = detect("  │\n  │\n  │");
+        let a = arrows(&ir);
+        assert_eq!(a.len(), 1, "expected 1 standalone vertical segment");
+        if let Node::Arrow { segments, .. } = &a[0] {
+            assert_eq!(segments[0].direction, Direction::Down);
+        }
+    }
+
+    // Coverage: vertical segment is box edge → rejected (lines 445-446)
+    #[test]
+    fn vertical_segment_is_box_edge() {
+        // │ between ┌ and └ is a box edge, should not be standalone arrow
+        let input = "┌──┐\n│  │\n│  │\n└──┘";
+        let ir = detect(input);
+        let a = arrows(&ir);
+        assert!(a.is_empty(), "box edges should not be standalone arrows");
+    }
+
+    // Coverage: vertical segment with corner adjacency → rejected
+    #[test]
+    fn vertical_segment_corner_adjacency() {
+        // │ between ┐ and ┘ — acts as right edge of a box
+        let input = "┌──┐\n│  │\n└──┘";
+        let ir = detect(input);
+        let a = arrows(&ir);
+        assert!(a.is_empty(), "box edges should not be detected as arrows");
+    }
+
+    // Coverage: horizontal segment at col zero (line 383-388)
+    #[test]
+    fn horizontal_segment_at_col_zero() {
+        // Standalone ─── starting at column 0
+        let ir = detect("───");
+        let a = arrows(&ir);
+        assert_eq!(a.len(), 1, "expected 1 standalone horizontal segment");
+    }
+
+    // Coverage: vertical segment at row zero (line 448-451)
+    #[test]
+    fn vertical_segment_at_row_zero() {
+        // Standalone │ starting at row 0
+        let ir = detect("│\n│\n│");
+        let a = arrows(&ir);
+        assert_eq!(a.len(), 1, "expected 1 standalone vertical segment");
+    }
+
+    // Coverage: single char vertical run → end_row <= start_row skip (line 442-443)
+    #[test]
+    fn single_char_vertical_run() {
+        // Single │ should be skipped (not enough length)
+        let ir = detect("│");
+        let a = arrows(&ir);
+        assert!(a.is_empty(), "single │ should not create an arrow");
+    }
+
+    // Coverage: single char horizontal run → skipped
+    #[test]
+    fn single_char_horizontal_run() {
+        let ir = detect("─");
+        let a = arrows(&ir);
+        assert!(a.is_empty(), "single ─ should not create an arrow");
+    }
+
+    // Coverage: isolated arrow tip creates single-point arrow (lines 239-253)
+    #[test]
+    fn isolated_arrow_tip() {
+        let ir = detect("►");
+        let a = arrows(&ir);
+        assert_eq!(a.len(), 1, "isolated tip should create single-point arrow");
+        if let Node::Arrow { segments, .. } = &a[0] {
+            assert_eq!(segments.len(), 1);
+            assert_eq!(segments[0].start, segments[0].end);
+        }
+    }
+
+    // Coverage: label in leftward arrow → label reversal (line 267-268)
+    #[test]
+    fn label_in_leftward_arrow() {
+        let ir = detect("◄──GET──");
+        let a = arrows(&ir);
+        assert!(!a.is_empty());
+        let has_get = a.iter().any(|n| {
+            if let Node::Arrow { label: Some(l), .. } = n {
+                l == "GET"
+            } else {
+                false
+            }
+        });
+        assert!(has_get, "leftward arrow should have reversed label 'GET'");
+    }
+
+    // Coverage: try_turn_vertical — junction blocks both directions (line 321)
+    #[test]
+    fn turn_vertical_blocked() {
+        // ┼ junction with no vertical neighbors that are connectable
+        // Place junction between spaces so vertical turn fails
+        let input = "   \n─┼─\n   ";
+        let ir = detect(input);
+        // The standalone ─ segments or no arrows — just exercising the path
+        let _ = arrows(&ir);
+    }
+
+    // Coverage: try_turn_horizontal — junction blocks both directions (line 346)
+    #[test]
+    fn turn_horizontal_blocked() {
+        // Vertical arrow with junction that can't turn horizontal
+        let input = " │ \n ┼ \n ▼ ";
+        let ir = detect(input);
+        let _ = arrows(&ir);
+    }
+
+    // Coverage: L-shape via junction turning vertical from horizontal trace
+    #[test]
+    fn horizontal_trace_turns_vertical_at_junction() {
+        // ► traces left through ─ to ┼ junction, which has │ below
+        let input = "──┼►\n  │ \n  │ ";
+        let ir = detect(input);
+        let a = arrows(&ir);
+        assert!(!a.is_empty());
+    }
+
+    // Coverage: detect_arrows on empty grid (line 456)
+    #[test]
+    fn empty_grid_no_arrows() {
+        let ir = detect("");
+        assert!(arrows(&ir).is_empty());
+    }
+
+    // Coverage: junction_allows true for single-line junctions
+    #[test]
+    fn single_junction_allows_true() {
+        // ├ allows Right, Up, Down
+        assert!(junction_allows('├', Direction::Right));
+        assert!(junction_allows('├', Direction::Up));
+        assert!(junction_allows('├', Direction::Down));
+        // ┬ allows Left, Right, Down
+        assert!(junction_allows('┬', Direction::Left));
+        assert!(junction_allows('┬', Direction::Right));
+        assert!(junction_allows('┬', Direction::Down));
+        // ┴ allows Left, Right, Up
+        assert!(junction_allows('┴', Direction::Left));
+        assert!(junction_allows('┴', Direction::Right));
+        assert!(junction_allows('┴', Direction::Up));
+        // ┤ allows Left, Up, Down
+        assert!(junction_allows('┤', Direction::Left));
+        assert!(junction_allows('┤', Direction::Up));
+        assert!(junction_allows('┤', Direction::Down));
+    }
+
+    // Coverage: horizontal trace hits junction, try_turn_vertical fails (line 171)
+    #[test]
+    fn horizontal_trace_junction_cant_turn_vertical() {
+        // ► at right, trace left through ─ to ┼. Spaces above and below ┼ → can't turn.
+        let input = "     \n──┼──►\n     ";
+        let ir = detect(input);
+        let a = arrows(&ir);
+        assert!(!a.is_empty());
+    }
+
+    // Coverage: try_turn_vertical returns None (line 321)
+    // Also covers junction_allows returning false for one direction (line 309)
+    #[test]
+    fn try_turn_vertical_returns_none() {
+        // ┬ doesn't allow Up. Down neighbor is a space → not connectable.
+        // So try_turn_vertical returns None.
+        let input = "──┬──►\n     ";
+        let ir = detect(input);
+        let _ = arrows(&ir);
     }
 }

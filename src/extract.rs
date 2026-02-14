@@ -281,11 +281,6 @@ fn extract_indented_blocks(input: &str, existing: &[DiagramRegion]) -> Vec<Diagr
             end += 1;
         }
 
-        // Strip trailing blank lines from the block.
-        while end > start && lines[end - 1].trim().is_empty() {
-            end -= 1;
-        }
-
         if end > start {
             let content: String = lines[start..end]
                 .iter()
@@ -519,5 +514,62 @@ other stuff
         let regions = extract_diagrams(input);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].content, "┌──┐\n│hi│\n└──┘");
+    }
+
+    // Coverage: indented markdown fence → fence_prefix non-empty stripping (line 141)
+    #[test]
+    fn indented_markdown_fence() {
+        let input = "    ```\n    ┌──┐\n    │hi│\n    └──┘\n    ```";
+        let regions = extract_diagrams(input);
+        // The fence extractor finds one region; the indented-block extractor
+        // may find a second overlapping one. Verify that at least one has the
+        // correct stripped content with the "    " prefix.
+        let fence_region = regions
+            .iter()
+            .find(|r| r.content == "┌──┐\n│hi│\n└──┘" && r.prefix == "    ");
+        assert!(
+            fence_region.is_some(),
+            "expected a region with stripped indented fence content"
+        );
+    }
+
+    // Coverage: indented block with blank line continuation (lines 268-276)
+    #[test]
+    fn indented_block_with_blank_line() {
+        let input = "text\n    ┌──┐\n    │hi│\n\n    │lo│\n    └──┘\nend";
+        let regions = extract_diagrams(input);
+        assert_eq!(regions.len(), 1);
+        // Blank line in the middle should be preserved as ""
+        assert!(regions[0].content.contains("hi"));
+        assert!(regions[0].content.contains("lo"));
+    }
+
+    // Coverage: indented block trailing blank lines stripped (line 286)
+    #[test]
+    fn indented_block_trailing_blank_stripped() {
+        let input = "text\n    ┌──┐\n    └──┘\n\n\nend";
+        let regions = extract_diagrams(input);
+        assert_eq!(regions.len(), 1);
+        // Trailing blanks should be stripped, ending at line 3
+        assert_eq!(regions[0].end_line, 3);
+    }
+
+    // Coverage: indented text without box chars → not extracted (line 302)
+    #[test]
+    fn indented_block_no_box_chars() {
+        let input = "text\n    just some indented text\n    more text\nend";
+        let regions = extract_diagrams(input);
+        assert!(regions.is_empty());
+    }
+
+    // Coverage: blank line mapped to "" in indented content (line 294)
+    #[test]
+    fn indented_block_blank_line_becomes_empty_string() {
+        let input = "header\n    ┌──┐\n\n    └──┘\nfooter";
+        let regions = extract_diagrams(input);
+        assert_eq!(regions.len(), 1);
+        let lines: Vec<&str> = regions[0].content.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1], ""); // blank line becomes ""
     }
 }

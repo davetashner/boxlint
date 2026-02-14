@@ -37,6 +37,20 @@ Examples:
 - `test: add edge cases for nested box detection`
 - `chore: update dependencies`
 
+### Test Coverage
+
+This project maintains **100% code coverage**. All new code must be covered by tests. CI measures coverage with `cargo-tarpaulin`.
+
+```bash
+cargo tarpaulin --out Stdout
+```
+
+Rules:
+- Every new function, branch, and error path must have a corresponding test
+- If a line is genuinely untestable (e.g., `main()` calling `process::exit`, stdin reads), mark it with `#[cfg(not(tarpaulin_include))]` and document why
+- Do not merge code that reduces coverage below 100%
+- When removing dead code or unreachable branches, prefer deletion over exclusion annotations
+
 ### Clippy
 
 CI runs `cargo clippy -- -D warnings` — all warnings are errors. Common pitfalls:
