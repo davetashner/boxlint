@@ -1,6 +1,7 @@
 pub mod detect_arrows;
 pub mod detect_boxes;
 pub mod extract;
+pub mod fix_adjacent_boxes;
 pub mod fix_box_corners;
 pub mod grid;
 pub mod lint_adjacent_boxes;
@@ -148,6 +149,9 @@ impl RuleRegistry {
         registry
             .fixers
             .push(Box::new(crate::fix_box_corners::BoxCornerEdgeFixer));
+        registry
+            .fixers
+            .push(Box::new(crate::fix_adjacent_boxes::AdjacentBoxAlignmentFixer));
         registry
     }
 
