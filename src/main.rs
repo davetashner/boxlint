@@ -1,5 +1,6 @@
 pub mod detect_arrows;
 pub mod detect_boxes;
+pub mod extract;
 pub mod grid;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -51,6 +52,10 @@ pub enum Command {
         /// Suppress warnings, show only errors
         #[arg(short, long)]
         quiet: bool,
+
+        /// Prefix to strip from each line before processing
+        #[arg(long)]
+        strip_prefix: Option<String>,
     },
 }
 
@@ -226,13 +231,30 @@ fn run_lint(
 
     let mut all_diags = Vec::new();
     for (file, content) in &inputs {
-        let mut diags = registry.run_lint(content);
-        for d in &mut diags {
-            if d.file.is_empty() {
-                d.file = file.clone();
+        let regions = extract::extract_diagrams(content);
+        if regions.is_empty() {
+            // No diagrams detected; lint the whole input.
+            let mut diags = registry.run_lint(content);
+            for d in &mut diags {
+                if d.file.is_empty() {
+                    d.file = file.clone();
+                }
+            }
+            all_diags.extend(diags);
+        } else {
+            for region in &regions {
+                let mut diags = registry.run_lint(&region.content);
+                for d in &mut diags {
+                    if d.file.is_empty() {
+                        d.file = file.clone();
+                    }
+                    // Adjust line numbers to account for the region's position
+                    // in the original document.
+                    d.line += region.start_line - 1;
+                }
+                all_diags.extend(diags);
             }
         }
-        all_diags.extend(diags);
     }
 
     if quiet {
@@ -262,7 +284,13 @@ fn run_lint(
     }
 }
 
-fn run_fix(path: Option<&str>, in_place: bool, _quiet: bool, registry: &RuleRegistry) -> i32 {
+fn run_fix(
+    path: Option<&str>,
+    in_place: bool,
+    _quiet: bool,
+    registry: &RuleRegistry,
+    prefix: Option<&str>,
+) -> i32 {
     if in_place && path.is_none() {
         eprintln!("boxlint: --in-place requires a file argument");
         return 2;
@@ -301,14 +329,45 @@ fn run_fix(path: Option<&str>, in_place: bool, _quiet: bool, registry: &RuleRegi
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     for (file, content) in &inputs {
-        let fixed = registry.run_fix(content);
+        let output = if let Some(pfx) = prefix {
+            // Explicit prefix: strip, fix, restore.
+            let stripped = extract::strip_prefix(content, pfx);
+            let fixed = registry.run_fix(&stripped);
+            extract::restore_prefix(&fixed, pfx)
+        } else {
+            // Auto-detect embedded diagrams.
+            let regions = extract::extract_diagrams(content);
+            if regions.is_empty() || (regions.len() == 1 && regions[0].prefix.is_empty()) {
+                // No embedded prefix detected; fix the whole input.
+                registry.run_fix(content)
+            } else {
+                // Fix each region in place within the original document.
+                let lines: Vec<&str> = content.lines().collect();
+                let mut result_lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+
+                for region in &regions {
+                    let fixed_content = registry.run_fix(&region.content);
+                    let fixed_lines: Vec<&str> = fixed_content.lines().collect();
+
+                    // Replace lines in the result, restoring the prefix.
+                    for (i, fixed_line) in fixed_lines.iter().enumerate() {
+                        let doc_idx = region.start_line - 1 + i;
+                        if doc_idx < result_lines.len() {
+                            result_lines[doc_idx] = format!("{}{}", region.prefix, fixed_line);
+                        }
+                    }
+                }
+
+                result_lines.join("\n")
+            }
+        };
         if in_place {
-            if let Err(e) = fs::write(file, &fixed) {
+            if let Err(e) = fs::write(file, &output) {
                 eprintln!("boxlint: {file}: {e}");
                 return 2;
             }
         } else {
-            let _ = stdout.write_all(fixed.as_bytes());
+            let _ = stdout.write_all(output.as_bytes());
         }
     }
 
@@ -333,7 +392,14 @@ fn main() {
             path,
             in_place,
             quiet,
-        } => run_fix(path.as_deref(), *in_place, *quiet, &registry),
+            strip_prefix,
+        } => run_fix(
+            path.as_deref(),
+            *in_place,
+            *quiet,
+            &registry,
+            strip_prefix.as_deref(),
+        ),
     };
 
     process::exit(code);
@@ -401,9 +467,15 @@ mod tests {
     fn parse_fix_no_args() {
         let cli = Cli::try_parse_from(["boxlint", "fix"]).unwrap();
         match cli.command {
-            Command::Fix { path, in_place, .. } => {
+            Command::Fix {
+                path,
+                in_place,
+                strip_prefix,
+                ..
+            } => {
                 assert!(path.is_none());
                 assert!(!in_place);
+                assert!(strip_prefix.is_none());
             }
             _ => panic!("expected Fix command"),
         }
@@ -540,7 +612,7 @@ mod tests {
     #[test]
     fn fix_in_place_without_file_returns_two() {
         let registry = RuleRegistry::new();
-        let code = run_fix(None, true, false, &registry);
+        let code = run_fix(None, true, false, &registry, None);
         assert_eq!(code, 2);
     }
 
@@ -552,6 +624,7 @@ mod tests {
             false,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 2);
     }
@@ -597,7 +670,7 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(Some(file.to_str().unwrap()), false, false, &registry);
+        let code = run_fix(Some(file.to_str().unwrap()), false, false, &registry, None);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -611,7 +684,7 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry);
+        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry, None);
         assert_eq!(code, 0);
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "hello\n");
