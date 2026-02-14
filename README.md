@@ -1,5 +1,7 @@
 # boxlint
 
+![boxlint hero](assets/github-hero.png)
+
 A linter and auto-fixer for Unicode box-drawing diagrams.
 
 [![CI](https://github.com/davetashner/boxlint/actions/workflows/ci.yml/badge.svg)](https://github.com/davetashner/boxlint/actions/workflows/ci.yml)
