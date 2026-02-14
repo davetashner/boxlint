@@ -1,10 +1,10 @@
-/// 2D character grid and diagram intermediate representation.
-///
-/// The [`Grid`] struct parses raw UTF-8 text into a 2D array of characters,
-/// preserving original line:col positions for diagnostics. Character
-/// classification helpers identify box-drawing elements. The [`DiagramIR`]
-/// struct holds the grid plus detected nodes (boxes, arrows, text) that
-/// downstream passes will populate.
+// 2D character grid and diagram intermediate representation.
+//
+// The `Grid` struct parses raw UTF-8 text into a 2D array of characters,
+// preserving original line:col positions for diagnostics. Character
+// classification helpers identify box-drawing elements. The `DiagramIR`
+// struct holds the grid plus detected nodes (boxes, arrows, text) that
+// downstream passes will populate.
 
 // ---------------------------------------------------------------------------
 // Grid
@@ -83,7 +83,10 @@ pub fn is_arrow_tip(ch: char) -> bool {
 
 /// Returns `true` for junction characters: `├┤┬┴┼╠╣╦╩╬`
 pub fn is_junction(ch: char) -> bool {
-    matches!(ch, '├' | '┤' | '┬' | '┴' | '┼' | '╠' | '╣' | '╦' | '╩' | '╬')
+    matches!(
+        ch,
+        '├' | '┤' | '┬' | '┴' | '┼' | '╠' | '╣' | '╦' | '╩' | '╬'
+    )
 }
 
 /// Returns `true` for any box-drawing or line character (corners, edges,
@@ -141,10 +144,7 @@ pub enum Node {
         label: Option<String>,
     },
     /// Free-standing text.
-    Text {
-        position: Position,
-        content: String,
-    },
+    Text { position: Position, content: String },
 }
 
 /// The intermediate representation of a diagram. Holds the parsed [`Grid`]
