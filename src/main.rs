@@ -6,6 +6,7 @@ pub mod fix_box_content;
 pub mod fix_box_corners;
 pub mod grid;
 pub mod lint_adjacent_boxes;
+pub mod lint_arrow_connect;
 pub mod lint_box_content;
 pub mod lint_box_corners;
 
@@ -151,6 +152,9 @@ impl RuleRegistry {
         registry
             .lint_rules
             .push(Box::new(crate::lint_box_content::BoxContentAlignmentLint));
+        registry
+            .lint_rules
+            .push(Box::new(crate::lint_arrow_connect::ArrowConnectLint));
         registry
             .fixers
             .push(Box::new(crate::fix_box_corners::BoxCornerEdgeFixer));
