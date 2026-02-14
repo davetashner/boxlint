@@ -3,6 +3,7 @@ pub mod detect_boxes;
 pub mod extract;
 pub mod fix_box_corners;
 pub mod grid;
+pub mod lint_adjacent_boxes;
 pub mod lint_box_corners;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -141,6 +142,9 @@ impl RuleRegistry {
         registry
             .lint_rules
             .push(Box::new(crate::lint_box_corners::BoxCornerEdgeLint));
+        registry
+            .lint_rules
+            .push(Box::new(crate::lint_adjacent_boxes::AdjacentBoxAlignmentLint));
         registry
             .fixers
             .push(Box::new(crate::fix_box_corners::BoxCornerEdgeFixer));
