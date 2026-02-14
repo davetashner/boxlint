@@ -105,6 +105,7 @@ fn diag(line: usize, col: usize, level: Level, message: String) -> Diagnostic {
         level,
         message,
         rule: RULE.to_string(),
+        fix: None,
     }
 }
 

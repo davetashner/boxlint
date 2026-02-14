@@ -23,6 +23,7 @@ fn diag(line: usize, col: usize, level: Level, message: String, rule: &str) -> D
         level,
         message,
         rule: rule.to_string(),
+        fix: None,
     }
 }
 
