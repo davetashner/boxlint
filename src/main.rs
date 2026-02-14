@@ -100,6 +100,23 @@ pub enum Command {
         #[arg(long, value_delimiter = ',')]
         ignore: Vec<String>,
     },
+    /// Check a file or stdin silently (exit 0 = clean, exit 1 = issues)
+    Check {
+        /// File or directory to check (reads stdin if omitted)
+        path: Option<String>,
+
+        /// Filename to use in diagnostics when reading from stdin
+        #[arg(long)]
+        stdin_filename: Option<String>,
+
+        /// Only run these rules (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        rule: Vec<String>,
+
+        /// Skip these rules (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        ignore: Vec<String>,
+    },
     /// Start MCP (Model Context Protocol) server over stdio
     #[cfg(feature = "mcp")]
     Mcp,
@@ -419,6 +436,32 @@ fn run_lint(
     }
 }
 
+fn run_check(path: Option<&str>, registry: &RuleRegistry, stdin_filename: Option<&str>) -> i32 {
+    let inputs = match load_inputs(path, stdin_filename) {
+        Ok(inputs) => inputs,
+        Err(code) => return code,
+    };
+
+    for (_, content) in &inputs {
+        let regions = extract::extract_diagrams(content);
+        if regions.is_empty() {
+            let diags = registry.run_lint(content);
+            if diags.iter().any(|d| d.level == Level::Error) {
+                return 1;
+            }
+        } else {
+            for region in &regions {
+                let diags = registry.run_lint(&region.content);
+                if diags.iter().any(|d| d.level == Level::Error) {
+                    return 1;
+                }
+            }
+        }
+    }
+
+    0
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_fix(
     path: Option<&str>,
@@ -663,6 +706,19 @@ fn main() {
                     *diff,
                     stdin_filename.as_deref(),
                 )
+            }
+        }
+        Command::Check {
+            path,
+            stdin_filename,
+            rule,
+            ignore,
+        } => {
+            let rc = registry.filter(rule, ignore);
+            if rc != 0 {
+                rc
+            } else {
+                run_check(path.as_deref(), &registry, stdin_filename.as_deref())
             }
         }
         #[cfg(feature = "mcp")]
@@ -1869,5 +1925,176 @@ mod tests {
         assert!(names.contains(&"box-content-alignment"));
         assert!(names.contains(&"arrow-connect"));
         assert!(names.contains(&"box-content-sizing"));
+    }
+
+    // check subcommand tests
+
+    #[test]
+    fn parse_check_no_args() {
+        let cli = Cli::try_parse_from(["boxlint", "check"]).unwrap();
+        match cli.command {
+            Command::Check {
+                path,
+                stdin_filename,
+                rule,
+                ignore,
+            } => {
+                assert!(path.is_none());
+                assert!(stdin_filename.is_none());
+                assert!(rule.is_empty());
+                assert!(ignore.is_empty());
+            }
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_with_file() {
+        let cli = Cli::try_parse_from(["boxlint", "check", "foo.txt"]).unwrap();
+        match cli.command {
+            Command::Check { path, .. } => {
+                assert_eq!(path.as_deref(), Some("foo.txt"));
+            }
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_with_rule() {
+        let cli = Cli::try_parse_from(["boxlint", "check", "--rule", "box-corner-edge"]).unwrap();
+        match cli.command {
+            Command::Check { rule, .. } => {
+                assert_eq!(rule, vec!["box-corner-edge"]);
+            }
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_with_stdin_filename() {
+        let cli =
+            Cli::try_parse_from(["boxlint", "check", "--stdin-filename", "test.txt"]).unwrap();
+        match cli.command {
+            Command::Check {
+                stdin_filename,
+                path,
+                ..
+            } => {
+                assert_eq!(stdin_filename.as_deref(), Some("test.txt"));
+                assert!(path.is_none());
+            }
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn check_clean_file_returns_zero() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_clean");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("clean.txt");
+        fs::write(&file, "hello\n").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_error_file_returns_one() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_err");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("broken.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(ErrorRule));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_file_not_found_returns_two() {
+        let registry = RuleRegistry::new();
+        let code = run_check(Some("/nonexistent/path/to/file.txt"), &registry, None);
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn check_directory() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_dir");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("a.txt"), "hello").unwrap();
+        fs::write(dir.join("b.txt"), "world").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_check(Some(dir.to_str().unwrap()), &registry, None);
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_with_diagram_regions() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_regions");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(ErrorRule));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_clean_diagram_regions_returns_zero() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_regions_clean");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_warnings_only_returns_zero() {
+        struct WarnOnlyRule;
+        impl LintRule for WarnOnlyRule {
+            fn check(&self, _input: &str) -> Vec<Diagnostic> {
+                vec![Diagnostic {
+                    file: String::new(),
+                    line: 1,
+                    col: 1,
+                    level: Level::Warning,
+                    message: "a warning".to_string(),
+                    rule: "warn-only".to_string(),
+                }]
+            }
+            fn name(&self) -> &str {
+                "warn-only"
+            }
+        }
+
+        let dir = std::env::temp_dir().join("boxlint_test_check_warn");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(WarnOnlyRule));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
