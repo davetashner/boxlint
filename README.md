@@ -9,11 +9,20 @@ A linter and auto-fixer for Unicode box-drawing diagrams.
 
 ## Installation
 
-### Prerequisites
+### Pre-built binaries
 
-A [Rust toolchain](https://rustup.rs/) (1.75 or later).
+Download the latest release for your platform:
+
+```bash
+curl -fsSL https://github.com/davetashner/boxlint/releases/latest/download/boxlint-<target>.tar.gz | tar xz
+sudo mv boxlint /usr/local/bin/
+```
+
+Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`
 
 ### From crates.io
+
+Requires a [Rust toolchain](https://rustup.rs/) (1.75 or later).
 
 ```bash
 cargo install boxlint
