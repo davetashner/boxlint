@@ -1,3 +1,4 @@
+pub mod detect_boxes;
 pub mod grid;
 
 use clap::{Parser, Subcommand, ValueEnum};
