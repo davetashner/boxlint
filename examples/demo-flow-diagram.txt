@@ -20,8 +20,8 @@
   │   Claims = 8 fields │              │  │     (OPA)       │ │
   │                     │              │  │  3. Publish     │ │
   └─────────────────────┘              │  │     (cub CLI)   │ │
-                                       │  └───────┬─────────┘ │
-                                       └──────────┼───────────┘
+                                       │  └───────┬────────┘ │
+                                       └──────────┼──────────┘
                                                   │
                                          cub unit update
                                                   │
@@ -38,7 +38,7 @@
                                        │                      │
                                        │  (Authoritative      │
                                        │   source of truth)   │
-                                       └──────────┬───────────┘
+                                       └──────────┬──────────┘
                                                   │
                                        CMP plugin fetches
                                        HeadRevisionNum
@@ -65,12 +65,12 @@
   │            │   │                                   │   │   (Upbound)         │  │
   │            └──►│  XRD: ServerlessEventAppClaim     │   │                     │  │
   │                │               │                   │   │   S3, DynamoDB,     │  │
-  │                │  Composition: serverless-event-app │──►│   Lambda, IAM,     │  │
+  │                │ Composition: serverless-event-app  │──►│   Lambda, IAM,     │  │
   │                │               │                   │   │   EventBridge       │  │
   │                │  Expands 1 Claim → 17 Resources   │   └──────────┬──────────┘  │
   │                └──────────────────────────────────┘              │             │
   │                                                                  │             │
-  └──────────────────────────────────────────────────────────────────┼─────────────┘
+  └──────────────────────────────────────────────────────────────────┼────────────┘
                                                                      │
                                                             AWS API calls
                                                                      │
@@ -82,8 +82,8 @@
                                        │  │    S3     │       │   DynamoDB     │  │
                                        │  │  static   │       │   messages     │  │
                                        │  │  site +   │       │   table        │  │
-                                       │  │  artifacts│       └───────┬────────┘  │
-                                       │  └─────┬─────┘               │           │
+                                       │  │ artifacts │       └───────┬────────┘  │
+                                       │  └─────┬────┘               │           │
                                        │        │         ┌───────────┴────────┐  │
                                        │        │         │    EventBridge     │  │
                                        │        │         └───────────┬────────┘  │
@@ -116,7 +116,7 @@
                                        ┌─────────────────────┐
                                        │      ConfigHub       │
                                        │  (source of truth)   │
-                                       └──────────▲───────────┘
+                                       └──────────▲──────────┘
                                                   │
                                        capture-drift-to-
                                        confighub.sh
