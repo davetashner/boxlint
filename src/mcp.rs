@@ -32,12 +32,14 @@ pub struct FixDiagramParams {
     pub content: String,
 }
 
+#[cfg(not(tarpaulin_include))]
 impl Default for BoxlintMcpServer {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(not(tarpaulin_include))]
 #[tool_router]
 impl BoxlintMcpServer {
     pub fn new() -> Self {
@@ -84,6 +86,7 @@ impl BoxlintMcpServer {
     }
 }
 
+#[cfg(not(tarpaulin_include))]
 #[tool_handler]
 impl ServerHandler for BoxlintMcpServer {
     fn get_info(&self) -> ServerInfo {
@@ -109,6 +112,7 @@ impl ServerHandler for BoxlintMcpServer {
     }
 }
 
+#[cfg(not(tarpaulin_include))]
 pub fn install_mcp_config(project: bool) -> Result<(), String> {
     let settings_path = if project {
         let cwd =
@@ -189,6 +193,7 @@ pub fn install_mcp_config_to(settings_path: &std::path::Path) -> Result<(), Stri
     Ok(())
 }
 
+#[cfg(not(tarpaulin_include))]
 pub async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     let service = BoxlintMcpServer::new()
         .serve(rmcp::transport::stdio())
