@@ -129,9 +129,7 @@ fn adjacent_to_text(ir: &DiagramIR, p: Position) -> bool {
                 break;
             }
             match ir.grid.get(nr as usize, nc as usize) {
-                Some(ch)
-                    if !ch.is_whitespace() && !is_line_drawing(ch) && !is_arrow_tip(ch) =>
-                {
+                Some(ch) if !ch.is_whitespace() && !is_line_drawing(ch) && !is_arrow_tip(ch) => {
                     return true;
                 }
                 Some(ch) if ch.is_whitespace() => continue,
