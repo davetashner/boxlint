@@ -15,7 +15,7 @@ pub mod lint_box_corners;
 pub mod mcp;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -325,6 +325,57 @@ fn collect_files(path: &str) -> io::Result<Vec<String>> {
     } else {
         Ok(vec![path.to_string()])
     }
+}
+
+// ---------------------------------------------------------------------------
+// Configuration file
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+struct Config {
+    #[serde(default)]
+    ignore: Vec<String>,
+}
+
+/// Load config from `boxlint.toml` or `.boxlintrc` in the given directory.
+/// Returns `Config::default()` if neither file exists or on parse error.
+fn load_config(dir: &Path) -> Config {
+    for filename in &["boxlint.toml", ".boxlintrc"] {
+        let path = dir.join(filename);
+        if path.exists() {
+            match fs::read_to_string(&path) {
+                Ok(contents) => match toml::from_str::<Config>(&contents) {
+                    Ok(config) => return config,
+                    Err(e) => {
+                        eprintln!("boxlint: warning: failed to parse {filename}: {e}");
+                        return Config::default();
+                    }
+                },
+                Err(e) => {
+                    eprintln!("boxlint: warning: failed to read {filename}: {e}");
+                    return Config::default();
+                }
+            }
+        }
+    }
+    Config::default()
+}
+
+/// Merge CLI `--rule` / `--ignore` flags with config file `ignore` list.
+/// If `--rule` is provided, config ignore is skipped (explicit include overrides).
+/// Otherwise, config ignore is unioned with CLI `--ignore`.
+fn merge_ignore(cli_rule: &[String], cli_ignore: &[String], config: &Config) -> Vec<String> {
+    if !cli_rule.is_empty() {
+        // --rule takes full precedence; config ignore is skipped
+        return cli_ignore.to_vec();
+    }
+    let mut merged = cli_ignore.to_vec();
+    for name in &config.ignore {
+        if !merged.contains(name) {
+            merged.push(name.clone());
+        }
+    }
+    merged
 }
 
 // ---------------------------------------------------------------------------
@@ -714,6 +765,7 @@ fn unified_diff(original: &str, modified: &str, filename: &str) -> String {
 fn main() {
     let cli = Cli::parse();
     let mut registry = RuleRegistry::new();
+    let config = load_config(Path::new("."));
 
     let code = match &cli.command {
         Command::Lint {
@@ -726,7 +778,8 @@ fn main() {
             fix,
             in_place,
         } => {
-            let rc = registry.filter(rule, ignore);
+            let merged_ignore = merge_ignore(rule, ignore, &config);
+            let rc = registry.filter(rule, &merged_ignore);
             if rc != 0 {
                 rc
             } else {
@@ -752,7 +805,8 @@ fn main() {
             rule,
             ignore,
         } => {
-            let rc = registry.filter(rule, ignore);
+            let merged_ignore = merge_ignore(rule, ignore, &config);
+            let rc = registry.filter(rule, &merged_ignore);
             if rc != 0 {
                 rc
             } else {
@@ -774,7 +828,8 @@ fn main() {
             rule,
             ignore,
         } => {
-            let rc = registry.filter(rule, ignore);
+            let merged_ignore = merge_ignore(rule, ignore, &config);
+            let rc = registry.filter(rule, &merged_ignore);
             if rc != 0 {
                 rc
             } else {
@@ -2354,5 +2409,147 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         #[cfg(unix)]
         assert_eq!(code, 2);
+    }
+
+    // Config file tests
+
+    #[test]
+    fn config_deserialize_valid() {
+        let toml_str = r#"ignore = ["box-content-alignment", "arrow-connect"]"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.ignore,
+            vec!["box-content-alignment", "arrow-connect"]
+        );
+    }
+
+    #[test]
+    fn config_deserialize_empty() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.ignore.is_empty());
+    }
+
+    #[test]
+    fn config_deserialize_missing_ignore() {
+        let toml_str = r#"# just a comment"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.ignore.is_empty());
+    }
+
+    #[test]
+    fn config_default_is_empty() {
+        let config = Config::default();
+        assert!(config.ignore.is_empty());
+    }
+
+    #[test]
+    fn load_config_no_file() {
+        let dir = std::env::temp_dir().join("boxlint_test_no_config");
+        let _ = fs::create_dir_all(&dir);
+
+        let config = load_config(&dir);
+        assert!(config.ignore.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_config_boxlint_toml() {
+        let dir = std::env::temp_dir().join("boxlint_test_config_toml");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("boxlint.toml"), r#"ignore = ["arrow-connect"]"#).unwrap();
+
+        let config = load_config(&dir);
+        assert_eq!(config.ignore, vec!["arrow-connect"]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_config_boxlintrc_fallback() {
+        let dir = std::env::temp_dir().join("boxlint_test_config_rc");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join(".boxlintrc"), r#"ignore = ["box-corner-edge"]"#).unwrap();
+
+        let config = load_config(&dir);
+        assert_eq!(config.ignore, vec!["box-corner-edge"]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_config_boxlint_toml_takes_precedence() {
+        let dir = std::env::temp_dir().join("boxlint_test_config_precedence");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("boxlint.toml"), r#"ignore = ["arrow-connect"]"#).unwrap();
+        fs::write(dir.join(".boxlintrc"), r#"ignore = ["box-corner-edge"]"#).unwrap();
+
+        let config = load_config(&dir);
+        assert_eq!(config.ignore, vec!["arrow-connect"]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_config_parse_error_returns_default() {
+        let dir = std::env::temp_dir().join("boxlint_test_config_bad");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("boxlint.toml"), "not valid {{{{ toml").unwrap();
+
+        let config = load_config(&dir);
+        assert!(config.ignore.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_ignore_no_cli_no_config() {
+        let config = Config::default();
+        let result = merge_ignore(&[], &[], &config);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn merge_ignore_cli_only() {
+        let config = Config::default();
+        let result = merge_ignore(&[], &["arrow-connect".to_string()], &config);
+        assert_eq!(result, vec!["arrow-connect"]);
+    }
+
+    #[test]
+    fn merge_ignore_config_only() {
+        let config = Config {
+            ignore: vec!["arrow-connect".to_string()],
+        };
+        let result = merge_ignore(&[], &[], &config);
+        assert_eq!(result, vec!["arrow-connect"]);
+    }
+
+    #[test]
+    fn merge_ignore_union() {
+        let config = Config {
+            ignore: vec!["arrow-connect".to_string()],
+        };
+        let result = merge_ignore(&[], &["box-corner-edge".to_string()], &config);
+        assert_eq!(result, vec!["box-corner-edge", "arrow-connect"]);
+    }
+
+    #[test]
+    fn merge_ignore_deduplicates() {
+        let config = Config {
+            ignore: vec!["arrow-connect".to_string()],
+        };
+        let result = merge_ignore(&[], &["arrow-connect".to_string()], &config);
+        assert_eq!(result, vec!["arrow-connect"]);
+    }
+
+    #[test]
+    fn merge_ignore_rule_overrides_config() {
+        let config = Config {
+            ignore: vec!["arrow-connect".to_string()],
+        };
+        // When --rule is provided, config ignore is skipped
+        let result = merge_ignore(&["box-corner-edge".to_string()], &[], &config);
+        assert!(result.is_empty());
     }
 }
