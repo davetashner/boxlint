@@ -2,6 +2,7 @@ pub mod detect_arrows;
 pub mod detect_boxes;
 pub mod extract;
 pub mod fix_adjacent_boxes;
+pub mod fix_arrow_connect;
 pub mod fix_box_content;
 pub mod fix_box_corners;
 pub mod grid;
@@ -164,6 +165,9 @@ impl RuleRegistry {
         registry
             .fixers
             .push(Box::new(crate::fix_box_content::BoxContentFixer));
+        registry
+            .fixers
+            .push(Box::new(crate::fix_arrow_connect::ArrowConnectFixer));
         registry
     }
 
