@@ -70,6 +70,10 @@ pub enum Command {
         /// Write fixes back to the file instead of stdout (requires --fix)
         #[arg(short = 'i', long = "in-place")]
         in_place: bool,
+
+        /// Stop output after N diagnostics (exit code still reflects all)
+        #[arg(long)]
+        max_errors: Option<usize>,
     },
     /// Auto-fix a file or stdin
     Fix {
@@ -124,6 +128,10 @@ pub enum Command {
         /// Skip these rules (comma-separated or repeated)
         #[arg(long, value_delimiter = ',')]
         ignore: Vec<String>,
+
+        /// Stop output after N diagnostics (exit code still reflects all)
+        #[arg(long)]
+        max_errors: Option<usize>,
     },
     /// Start MCP (Model Context Protocol) server over stdio
     #[cfg(feature = "mcp")]
@@ -428,6 +436,7 @@ fn load_file_inputs(p: &str) -> Result<Vec<(String, String)>, i32> {
     Ok(inputs)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_lint(
     path: Option<&str>,
     format: &OutputFormat,
@@ -436,6 +445,7 @@ fn run_lint(
     stdin_filename: Option<&str>,
     fix: bool,
     in_place: bool,
+    max_errors: Option<usize>,
 ) -> i32 {
     if in_place && !fix {
         eprintln!("boxlint: --in-place requires --fix");
@@ -483,9 +493,20 @@ fn run_lint(
         all_diags.retain(|d| d.level == Level::Error);
     }
 
+    let total_count = all_diags.len();
+    let display_diags: &[Diagnostic] = if let Some(limit) = max_errors {
+        if all_diags.len() > limit {
+            &all_diags[..limit]
+        } else {
+            &all_diags
+        }
+    } else {
+        &all_diags
+    };
+
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
-    for diag in &all_diags {
+    for diag in display_diags {
         match format {
             OutputFormat::Text => {
                 let _ = writeln!(stderr, "{diag}");
@@ -495,6 +516,13 @@ fn run_lint(
                     let _ = writeln!(stderr, "{json}");
                 }
             }
+        }
+    }
+
+    if let Some(limit) = max_errors {
+        if total_count > limit {
+            let suppressed = total_count - limit;
+            let _ = writeln!(stderr, "... and {suppressed} more diagnostics");
         }
     }
 
@@ -543,30 +571,59 @@ fn run_lint(
     }
 }
 
-fn run_check(path: Option<&str>, registry: &RuleRegistry, stdin_filename: Option<&str>) -> i32 {
+fn run_check(
+    path: Option<&str>,
+    registry: &RuleRegistry,
+    stdin_filename: Option<&str>,
+    max_errors: Option<usize>,
+) -> i32 {
     let inputs = match load_inputs(path, stdin_filename) {
         Ok(inputs) => inputs,
         Err(code) => return code,
     };
 
-    for (_, content) in &inputs {
+    let mut all_diags = Vec::new();
+    for (file, content) in &inputs {
         let regions = extract::extract_diagrams(content);
         if regions.is_empty() {
-            let diags = registry.run_lint(content);
-            if diags.iter().any(|d| d.level == Level::Error) {
-                return 1;
+            let mut diags = registry.run_lint(content);
+            for d in &mut diags {
+                if d.file.is_empty() {
+                    d.file = file.clone();
+                }
             }
+            all_diags.extend(diags);
         } else {
             for region in &regions {
-                let diags = registry.run_lint(&region.content);
-                if diags.iter().any(|d| d.level == Level::Error) {
-                    return 1;
+                let mut diags = registry.run_lint(&region.content);
+                for d in &mut diags {
+                    if d.file.is_empty() {
+                        d.file = file.clone();
+                    }
+                    d.line += region.start_line - 1;
                 }
+                all_diags.extend(diags);
             }
         }
     }
 
-    0
+    let has_errors = all_diags.iter().any(|d| d.level == Level::Error);
+
+    if let Some(limit) = max_errors {
+        let total_count = all_diags.len();
+        if total_count > limit {
+            let suppressed = total_count - limit;
+            let stderr = io::stderr();
+            let mut stderr = stderr.lock();
+            let _ = writeln!(stderr, "... and {suppressed} more diagnostics");
+        }
+    }
+
+    if has_errors {
+        1
+    } else {
+        0
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -777,6 +834,7 @@ fn main() {
             ignore,
             fix,
             in_place,
+            max_errors,
         } => {
             let merged_ignore = merge_ignore(rule, ignore, &config);
             let rc = registry.filter(rule, &merged_ignore);
@@ -791,6 +849,7 @@ fn main() {
                     stdin_filename.as_deref(),
                     *fix,
                     *in_place,
+                    *max_errors,
                 )
             }
         }
@@ -827,13 +886,19 @@ fn main() {
             stdin_filename,
             rule,
             ignore,
+            max_errors,
         } => {
             let merged_ignore = merge_ignore(rule, ignore, &config);
             let rc = registry.filter(rule, &merged_ignore);
             if rc != 0 {
                 rc
             } else {
-                run_check(path.as_deref(), &registry, stdin_filename.as_deref())
+                run_check(
+                    path.as_deref(),
+                    &registry,
+                    stdin_filename.as_deref(),
+                    *max_errors,
+                )
             }
         }
         #[cfg(feature = "mcp")]
@@ -872,6 +937,7 @@ mod tests {
                 ignore,
                 fix,
                 in_place,
+                max_errors,
             } => {
                 assert!(path.is_none());
                 assert_eq!(format, OutputFormat::Text);
@@ -881,6 +947,7 @@ mod tests {
                 assert!(ignore.is_empty());
                 assert!(!fix);
                 assert!(!in_place);
+                assert!(max_errors.is_none());
             }
             _ => panic!("expected Lint command"),
         }
@@ -1050,6 +1117,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -1067,6 +1135,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 2);
     }
@@ -1133,6 +1202,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -1357,6 +1427,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -1381,6 +1452,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -1405,6 +1477,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -1430,6 +1503,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -1455,6 +1529,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -1569,6 +1644,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -2088,11 +2164,13 @@ mod tests {
                 stdin_filename,
                 rule,
                 ignore,
+                max_errors,
             } => {
                 assert!(path.is_none());
                 assert!(stdin_filename.is_none());
                 assert!(rule.is_empty());
                 assert!(ignore.is_empty());
+                assert!(max_errors.is_none());
             }
             _ => panic!("expected Check command"),
         }
@@ -2145,7 +2223,7 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2160,7 +2238,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(ErrorRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2169,7 +2247,7 @@ mod tests {
     #[test]
     fn check_file_not_found_returns_two() {
         let registry = RuleRegistry::new();
-        let code = run_check(Some("/nonexistent/path/to/file.txt"), &registry, None);
+        let code = run_check(Some("/nonexistent/path/to/file.txt"), &registry, None, None);
         assert_eq!(code, 2);
     }
 
@@ -2181,7 +2259,7 @@ mod tests {
         fs::write(dir.join("b.txt"), "world").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(dir.to_str().unwrap()), &registry, None);
+        let code = run_check(Some(dir.to_str().unwrap()), &registry, None, None);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2196,7 +2274,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(ErrorRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2210,7 +2288,7 @@ mod tests {
         fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2242,7 +2320,7 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(WarnOnlyRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None);
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2291,6 +2369,7 @@ mod tests {
             None,
             false,
             true,
+            None,
         );
         assert_eq!(code, 2);
     }
@@ -2306,6 +2385,7 @@ mod tests {
             None,
             true,
             true,
+            None,
         );
         assert_eq!(code, 2);
     }
@@ -2327,6 +2407,7 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -2350,6 +2431,7 @@ mod tests {
             None,
             true,
             true,
+            None,
         );
         assert_eq!(code, 0);
         let content = fs::read_to_string(&file).unwrap();
@@ -2374,6 +2456,7 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -2400,6 +2483,7 @@ mod tests {
             None,
             true,
             true,
+            None,
         );
         #[cfg(unix)]
         {
@@ -2564,5 +2648,261 @@ mod tests {
         // When --rule is provided, config ignore is skipped
         let result = merge_ignore(&["box-corner-edge".to_string()], &[], &config);
         assert!(result.is_empty());
+    }
+
+    // --max-errors tests
+
+    /// A rule that produces N diagnostics, for testing --max-errors truncation.
+    struct MultiErrorRule(usize);
+    impl LintRule for MultiErrorRule {
+        fn check(&self, _input: &str) -> Vec<Diagnostic> {
+            (0..self.0)
+                .map(|i| Diagnostic {
+                    file: String::new(),
+                    line: i + 1,
+                    col: 1,
+                    level: Level::Error,
+                    message: format!("error {}", i + 1),
+                    rule: "multi-err".to_string(),
+                })
+                .collect()
+        }
+        fn name(&self) -> &str {
+            "multi-err"
+        }
+    }
+
+    #[test]
+    fn parse_lint_max_errors_flag() {
+        let cli =
+            Cli::try_parse_from(["boxlint", "lint", "--max-errors", "5"]).unwrap();
+        match cli.command {
+            Command::Lint { max_errors, .. } => {
+                assert_eq!(max_errors, Some(5));
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_max_errors_flag() {
+        let cli =
+            Cli::try_parse_from(["boxlint", "check", "--max-errors", "3"]).unwrap();
+        match cli.command {
+            Command::Check { max_errors, .. } => {
+                assert_eq!(max_errors, Some(3));
+            }
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn lint_max_errors_not_set_shows_all() {
+        let dir = std::env::temp_dir().join("boxlint_test_max_err_none");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(5)));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            None,
+        );
+        // All 5 are errors, so exit code is 1
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_max_errors_fewer_than_limit() {
+        let dir = std::env::temp_dir().join("boxlint_test_max_err_fewer");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(3)));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            Some(10),
+        );
+        // 3 errors < limit of 10, exit code still 1
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_max_errors_more_than_limit() {
+        let dir = std::env::temp_dir().join("boxlint_test_max_err_more");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(5)));
+        // Limit to 2; exit code should still reflect all 5 errors
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            Some(2),
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_max_errors_json_format() {
+        let dir = std::env::temp_dir().join("boxlint_test_max_err_json");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(5)));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Json,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            Some(2),
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_max_errors_zero_suppresses_all() {
+        let dir = std::env::temp_dir().join("boxlint_test_max_err_zero");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(3)));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            Some(0),
+        );
+        // Exit code still reflects all errors
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_max_errors_more_than_limit() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_max_err_more");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(5)));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(2));
+        // Exit code still reflects all errors
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_max_errors_fewer_than_limit() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_max_err_fewer");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(3)));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(10));
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_max_errors_not_set() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_max_err_none");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(5)));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None);
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_max_errors_with_regions() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_max_err_rgn");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(5)));
+        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(1));
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_max_errors_equal_to_count() {
+        let dir = std::env::temp_dir().join("boxlint_test_max_err_equal");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(MultiErrorRule(3)));
+        // Limit equals count: no truncation message
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            Some(3),
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
