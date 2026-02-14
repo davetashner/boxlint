@@ -149,6 +149,13 @@ pub enum OutputFormat {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FixSuggestion {
+    pub line: usize,
+    pub original: String,
+    pub replacement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Diagnostic {
     pub file: String,
     pub line: usize,
@@ -156,6 +163,8 @@ pub struct Diagnostic {
     pub level: Level,
     pub message: String,
     pub rule: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<FixSuggestion>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -297,6 +306,47 @@ impl RuleRegistry {
             result = fixer.fix(&result);
         }
         result
+    }
+
+    /// Return the set of fixer rule names.
+    pub fn fixer_names(&self) -> Vec<&str> {
+        self.fixers.iter().map(|f| f.name()).collect()
+    }
+
+    /// Attach fix suggestions to diagnostics by running the fixer and comparing
+    /// original vs fixed lines.
+    pub fn attach_fix_suggestions(&self, diags: &mut [Diagnostic], input: &str) {
+        if self.fixers.is_empty() {
+            return;
+        }
+
+        let fixer_names = self.fixer_names();
+        let has_fixable = diags.iter().any(|d| fixer_names.contains(&d.rule.as_str()));
+        if !has_fixable {
+            return;
+        }
+
+        let fixed = self.run_fix(input);
+        let orig_lines: Vec<&str> = input.lines().collect();
+        let fixed_lines: Vec<&str> = fixed.lines().collect();
+
+        for d in diags.iter_mut() {
+            if !fixer_names.contains(&d.rule.as_str()) {
+                continue;
+            }
+            let line_idx = d.line.saturating_sub(1);
+            if line_idx < orig_lines.len() && line_idx < fixed_lines.len() {
+                let orig = orig_lines[line_idx];
+                let fixd = fixed_lines[line_idx];
+                if orig != fixd {
+                    d.fix = Some(FixSuggestion {
+                        line: d.line,
+                        original: orig.to_string(),
+                        replacement: fixd.to_string(),
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -462,11 +512,15 @@ fn run_lint(
     };
 
     let mut all_diags = Vec::new();
+    let attach_fixes = *format == OutputFormat::Json;
     for (file, content) in &inputs {
         let regions = extract::extract_diagrams(content);
         if regions.is_empty() {
             // No diagrams detected; lint the whole input.
             let mut diags = registry.run_lint(content);
+            if attach_fixes {
+                registry.attach_fix_suggestions(&mut diags, content);
+            }
             for d in &mut diags {
                 if d.file.is_empty() {
                     d.file = file.clone();
@@ -476,6 +530,9 @@ fn run_lint(
         } else {
             for region in &regions {
                 let mut diags = registry.run_lint(&region.content);
+                if attach_fixes {
+                    registry.attach_fix_suggestions(&mut diags, &region.content);
+                }
                 for d in &mut diags {
                     if d.file.is_empty() {
                         d.file = file.clone();
@@ -483,6 +540,9 @@ fn run_lint(
                     // Adjust line numbers to account for the region's position
                     // in the original document.
                     d.line += region.start_line - 1;
+                    if let Some(ref mut fix) = d.fix {
+                        fix.line += region.start_line - 1;
+                    }
                 }
                 all_diags.extend(diags);
             }
@@ -1042,6 +1102,7 @@ mod tests {
             level: Level::Error,
             message: "broken corner".to_string(),
             rule: "corner-align".to_string(),
+            fix: None,
         };
         assert_eq!(
             d.to_string(),
@@ -1058,6 +1119,7 @@ mod tests {
             level: Level::Warning,
             message: "text overflow".to_string(),
             rule: "text-overflow".to_string(),
+            fix: None,
         };
         assert_eq!(
             d.to_string(),
@@ -1074,6 +1136,7 @@ mod tests {
             level: Level::Error,
             message: "broken corner".to_string(),
             rule: "corner-align".to_string(),
+            fix: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1094,6 +1157,7 @@ mod tests {
             level: Level::Warning,
             message: "msg".to_string(),
             rule: "r".to_string(),
+            fix: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1283,6 +1347,7 @@ mod tests {
                 level: Level::Error,
                 message: "test error".to_string(),
                 rule: "test-rule".to_string(),
+                fix: None,
             }]
         }
         fn name(&self) -> &str {
@@ -1331,6 +1396,7 @@ mod tests {
                         level: Level::Warning,
                         message: "a warning".to_string(),
                         rule: "warn-rule".to_string(),
+                        fix: None,
                     },
                     Diagnostic {
                         file: String::new(),
@@ -1339,6 +1405,7 @@ mod tests {
                         level: Level::Error,
                         message: "an error".to_string(),
                         rule: "err-rule".to_string(),
+                        fix: None,
                     },
                 ]
             }
@@ -1375,6 +1442,7 @@ mod tests {
                 level: Level::Error,
                 message: "test error".to_string(),
                 rule: "err".to_string(),
+                fix: None,
             }]
         }
         fn name(&self) -> &str {
@@ -1393,6 +1461,7 @@ mod tests {
                     level: Level::Warning,
                     message: "warn".to_string(),
                     rule: "w".to_string(),
+                    fix: None,
                 },
                 Diagnostic {
                     file: String::new(),
@@ -1401,6 +1470,7 @@ mod tests {
                     level: Level::Error,
                     message: "err".to_string(),
                     rule: "e".to_string(),
+                    fix: None,
                 },
             ]
         }
@@ -2306,6 +2376,7 @@ mod tests {
                     level: Level::Warning,
                     message: "a warning".to_string(),
                     rule: "warn-only".to_string(),
+                    fix: None,
                 }]
             }
             fn name(&self) -> &str {
@@ -2664,6 +2735,7 @@ mod tests {
                     level: Level::Error,
                     message: format!("error {}", i + 1),
                     rule: "multi-err".to_string(),
+                    fix: None,
                 })
                 .collect()
         }
@@ -2674,8 +2746,7 @@ mod tests {
 
     #[test]
     fn parse_lint_max_errors_flag() {
-        let cli =
-            Cli::try_parse_from(["boxlint", "lint", "--max-errors", "5"]).unwrap();
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--max-errors", "5"]).unwrap();
         match cli.command {
             Command::Lint { max_errors, .. } => {
                 assert_eq!(max_errors, Some(5));
@@ -2686,8 +2757,7 @@ mod tests {
 
     #[test]
     fn parse_check_max_errors_flag() {
-        let cli =
-            Cli::try_parse_from(["boxlint", "check", "--max-errors", "3"]).unwrap();
+        let cli = Cli::try_parse_from(["boxlint", "check", "--max-errors", "3"]).unwrap();
         match cli.command {
             Command::Check { max_errors, .. } => {
                 assert_eq!(max_errors, Some(3));
@@ -2900,6 +2970,279 @@ mod tests {
             false,
             false,
             Some(3),
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -- Fix suggestion tests --
+
+    #[test]
+    fn fixer_names_returns_registered_fixers() {
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        let names = registry.fixer_names();
+        assert!(names.contains(&"test-fixer"));
+    }
+
+    #[test]
+    fn fixer_names_empty_registry() {
+        let registry = RuleRegistry::new();
+        let names = registry.fixer_names();
+        assert!(!names.is_empty());
+    }
+
+    #[test]
+    fn attach_fix_suggestions_no_fixers() {
+        let registry = RuleRegistry {
+            lint_rules: vec![],
+            fixers: vec![],
+        };
+        let mut diags = vec![Diagnostic {
+            file: String::new(),
+            line: 1,
+            col: 1,
+            level: Level::Error,
+            message: "err".to_string(),
+            rule: "some-rule".to_string(),
+            fix: None,
+        }];
+        registry.attach_fix_suggestions(&mut diags, "input");
+        assert!(diags[0].fix.is_none());
+    }
+
+    #[test]
+    fn attach_fix_suggestions_no_matching_rule() {
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        let mut diags = vec![Diagnostic {
+            file: String::new(),
+            line: 1,
+            col: 1,
+            level: Level::Error,
+            message: "err".to_string(),
+            rule: "unrelated-rule".to_string(),
+            fix: None,
+        }];
+        registry.attach_fix_suggestions(&mut diags, "bad text");
+        assert!(diags[0].fix.is_none());
+    }
+
+    #[test]
+    fn attach_fix_suggestions_with_matching_fixer() {
+        struct FixableLintRule;
+        impl LintRule for FixableLintRule {
+            fn check(&self, _input: &str) -> Vec<Diagnostic> {
+                vec![Diagnostic {
+                    file: String::new(),
+                    line: 1,
+                    col: 1,
+                    level: Level::Error,
+                    message: "bad found".to_string(),
+                    rule: "test-fixer".to_string(),
+                    fix: None,
+                }]
+            }
+            fn name(&self) -> &str {
+                "test-fixer"
+            }
+        }
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(FixableLintRule));
+        registry.fixers.push(Box::new(TestFixer));
+
+        let mut diags = registry.run_lint("bad text");
+        registry.attach_fix_suggestions(&mut diags, "bad text");
+
+        let fixable: Vec<_> = diags.iter().filter(|d| d.rule == "test-fixer").collect();
+        assert_eq!(fixable.len(), 1);
+        assert!(fixable[0].fix.is_some());
+        let fix = fixable[0].fix.as_ref().unwrap();
+        assert_eq!(fix.line, 1);
+        assert_eq!(fix.original, "bad text");
+        assert_eq!(fix.replacement, "good text");
+    }
+
+    #[test]
+    fn attach_fix_suggestions_no_change_on_line() {
+        struct NoOpFixer;
+        impl Fixer for NoOpFixer {
+            fn fix(&self, input: &str) -> String {
+                input.to_string()
+            }
+            fn name(&self) -> &str {
+                "noop-fixer"
+            }
+        }
+
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(NoOpFixer));
+        let mut diags = vec![Diagnostic {
+            file: String::new(),
+            line: 1,
+            col: 1,
+            level: Level::Error,
+            message: "err".to_string(),
+            rule: "noop-fixer".to_string(),
+            fix: None,
+        }];
+        registry.attach_fix_suggestions(&mut diags, "unchanged");
+        assert!(diags[0].fix.is_none());
+    }
+
+    #[test]
+    fn fix_suggestion_serialization() {
+        let d = Diagnostic {
+            file: "f.txt".to_string(),
+            line: 1,
+            col: 1,
+            level: Level::Error,
+            message: "err".to_string(),
+            rule: "r".to_string(),
+            fix: Some(FixSuggestion {
+                line: 1,
+                original: "bad".to_string(),
+                replacement: "good".to_string(),
+            }),
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["fix"].is_object());
+        assert_eq!(parsed["fix"]["line"], 1);
+        assert_eq!(parsed["fix"]["original"], "bad");
+        assert_eq!(parsed["fix"]["replacement"], "good");
+    }
+
+    #[test]
+    fn fix_suggestion_omitted_when_none() {
+        let d = Diagnostic {
+            file: "f.txt".to_string(),
+            line: 1,
+            col: 1,
+            level: Level::Error,
+            message: "err".to_string(),
+            rule: "r".to_string(),
+            fix: None,
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.get("fix").is_none());
+    }
+
+    #[test]
+    fn run_lint_json_includes_fix_suggestions() {
+        struct FixableLintRule;
+        impl LintRule for FixableLintRule {
+            fn check(&self, _input: &str) -> Vec<Diagnostic> {
+                vec![Diagnostic {
+                    file: String::new(),
+                    line: 1,
+                    col: 1,
+                    level: Level::Error,
+                    message: "bad found".to_string(),
+                    rule: "test-fixer".to_string(),
+                    fix: None,
+                }]
+            }
+            fn name(&self) -> &str {
+                "test-fixer"
+            }
+        }
+
+        let dir = std::env::temp_dir().join("boxlint_test_fix_json");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "bad text").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(FixableLintRule));
+        registry.fixers.push(Box::new(TestFixer));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Json,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            None,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_fix_suggestions_skips_non_matching_in_mixed_diags() {
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        let mut diags = vec![
+            Diagnostic {
+                file: String::new(),
+                line: 1,
+                col: 1,
+                level: Level::Error,
+                message: "fixable".to_string(),
+                rule: "test-fixer".to_string(),
+                fix: None,
+            },
+            Diagnostic {
+                file: String::new(),
+                line: 1,
+                col: 1,
+                level: Level::Error,
+                message: "not fixable".to_string(),
+                rule: "other-rule".to_string(),
+                fix: None,
+            },
+        ];
+        registry.attach_fix_suggestions(&mut diags, "bad text");
+        // First diag matches fixer and gets a suggestion
+        assert!(diags[0].fix.is_some());
+        // Second diag doesn't match any fixer
+        assert!(diags[1].fix.is_none());
+    }
+
+    #[test]
+    fn run_lint_json_with_regions_attaches_fix_suggestions() {
+        struct FixableLintRule;
+        impl LintRule for FixableLintRule {
+            fn check(&self, _input: &str) -> Vec<Diagnostic> {
+                vec![Diagnostic {
+                    file: String::new(),
+                    line: 1,
+                    col: 1,
+                    level: Level::Error,
+                    message: "bad found".to_string(),
+                    rule: "test-fixer".to_string(),
+                    fix: None,
+                }]
+            }
+            fn name(&self) -> &str {
+                "test-fixer"
+            }
+        }
+
+        let dir = std::env::temp_dir().join("boxlint_test_fix_json_regions");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        // Content with a diagram region embedded in code
+        fs::write(&file, "code\n// ┌──┐\n// │bad│\n// └──┘\nmore\n").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(FixableLintRule));
+        registry.fixers.push(Box::new(TestFixer));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Json,
+            false,
+            &registry,
+            None,
+            false,
+            false,
+            None,
         );
         assert_eq!(code, 1);
 

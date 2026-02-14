@@ -21,6 +21,7 @@ fn diag(line: usize, col: usize, message: String) -> Diagnostic {
         level: Level::Warning,
         message,
         rule: RULE.to_string(),
+        fix: None,
     }
 }
 
