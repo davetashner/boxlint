@@ -957,4 +957,45 @@ mod tests {
         let mut grid = input_to_mut_grid("╔text╗\n║    ║\n╚════╝");
         assert!(!fix_double_box(&mut grid, 0, 0));
     }
+
+    // == edges_are_fixable branch coverage =====================================
+
+    #[test]
+    fn edges_are_fixable_rejects_all_space_top_edge() {
+        // Top edge is all spaces (no box-drawing char) → has_bd stays false
+        let grid = input_to_mut_grid("┌  ┐\n│  │\n└──┘");
+        assert!(!edges_are_fixable(&grid, 0, 0, 2, 3));
+    }
+
+    #[test]
+    fn edges_are_fixable_rejects_text_on_bottom_edge() {
+        let grid = input_to_mut_grid("┌──┐\n│  │\n└ab┘");
+        assert!(!edges_are_fixable(&grid, 0, 0, 2, 3));
+    }
+
+    #[test]
+    fn edges_are_fixable_rejects_all_space_bottom_edge() {
+        let grid = input_to_mut_grid("┌──┐\n│  │\n└  ┘");
+        assert!(!edges_are_fixable(&grid, 0, 0, 2, 3));
+    }
+
+    #[test]
+    fn edges_are_fixable_rejects_text_on_left_edge() {
+        let grid = input_to_mut_grid("┌──┐\na  │\n└──┘");
+        assert!(!edges_are_fixable(&grid, 0, 0, 2, 3));
+    }
+
+    #[test]
+    fn edges_are_fixable_rejects_left_edge_misalignment() {
+        // Space on left edge at col 1 with │ at col 0 → misalignment detected
+        let grid = input_to_mut_grid("│┌──┐\n││  │\n│   │\n│└──┘");
+        assert!(!edges_are_fixable(&grid, 0, 1, 3, 4));
+    }
+
+    #[test]
+    fn edges_are_fixable_rejects_all_space_right_edge() {
+        // Right edge column has only a space (row too short) → has_bd stays false
+        let grid = input_to_mut_grid("┌──┐\n│   \n└──┘");
+        assert!(!edges_are_fixable(&grid, 0, 0, 2, 3));
+    }
 }
