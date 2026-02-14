@@ -123,6 +123,110 @@ fn expected_corner(tl: char, position: &str) -> char {
 }
 
 // ---------------------------------------------------------------------------
+// Edge content validation
+// ---------------------------------------------------------------------------
+
+/// Returns true if `ch` is a character that could plausibly appear on a box
+/// edge: a box-drawing character (U+2500..U+257F) or a space (missing edge).
+fn is_fixable_edge_char(ch: char) -> bool {
+    ch == ' ' || ('\u{2500}'..='\u{257F}').contains(&ch)
+}
+
+/// Any vertical edge character (single or double).
+fn is_any_vertical_edge(ch: char) -> bool {
+    matches!(ch, '│' | '├' | '┤' | '┼' | '║' | '╠' | '╣' | '╬')
+}
+
+/// Check that ALL four edges of the candidate box contain only fixable chars,
+/// each edge has at least one box-drawing character (not all spaces), and no
+/// edge position looks like a misaligned edge (space with the expected edge
+/// character in the adjacent outward cell).
+fn edges_are_fixable(grid: &[Vec<char>], r: usize, c: usize, r2: usize, c2: usize) -> bool {
+    // Top edge
+    let mut has_bd = false;
+    for col in (c + 1)..c2 {
+        if let Some(ch) = grid_get(grid, r, col) {
+            if !is_fixable_edge_char(ch) {
+                return false;
+            }
+            if ch != ' ' {
+                has_bd = true;
+            }
+        }
+    }
+    if !has_bd {
+        return false;
+    }
+
+    // Bottom edge
+    has_bd = false;
+    for col in (c + 1)..c2 {
+        if let Some(ch) = grid_get(grid, r2, col) {
+            if !is_fixable_edge_char(ch) {
+                return false;
+            }
+            if ch != ' ' {
+                has_bd = true;
+            }
+        }
+    }
+    if !has_bd {
+        return false;
+    }
+
+    // Left edge
+    has_bd = false;
+    for row in (r + 1)..r2 {
+        if let Some(ch) = grid_get(grid, row, c) {
+            if !is_fixable_edge_char(ch) {
+                return false;
+            }
+            if ch == ' ' {
+                // Misalignment check: if the cell just outside has an edge char,
+                // the box corners are likely off-by-one — not a broken edge.
+                if c > 0 {
+                    if let Some(adj) = grid_get(grid, row, c - 1) {
+                        if is_any_vertical_edge(adj) {
+                            return false;
+                        }
+                    }
+                }
+            } else {
+                has_bd = true;
+            }
+        }
+    }
+    if !has_bd {
+        return false;
+    }
+
+    // Right edge
+    has_bd = false;
+    for row in (r + 1)..r2 {
+        if let Some(ch) = grid_get(grid, row, c2) {
+            if !is_fixable_edge_char(ch) {
+                return false;
+            }
+            if ch == ' ' {
+                // Misalignment check: edge char just outside → off-by-one
+                if let Some(adj) = grid_get(grid, row, c2 + 1) {
+                    if is_any_vertical_edge(adj) {
+                        return false;
+                    }
+                }
+            } else {
+                has_bd = true;
+            }
+        }
+    }
+    if !has_bd {
+        return false;
+    }
+
+    true
+}
+
+// ---------------------------------------------------------------------------
 // Core fix logic
 // ---------------------------------------------------------------------------
 
@@ -146,17 +250,19 @@ fn fix_single_box(grid: &mut [Vec<char>], r: usize, c: usize) -> bool {
         return false;
     }
 
-    // Check BR position has a corner-like char or something fixable
-    let br_ch = match grid_get(grid, r2, c2) {
-        Some(ch) => ch,
-        None => return false,
-    };
+    // Check BR position has a box corner (prevents false-positive matching
+    // where TR and BL come from different boxes)
+    match grid_get(grid, r2, c2) {
+        Some(ch) if is_box_corner(ch) => {}
+        _ => return false,
+    }
 
-    // BR must be a box corner or something we can replace
-    // (if it's already correct ┘, or wrong corner, or non-corner char)
-    let _ = br_ch; // We'll fix it regardless
+    // Validate edges don't cross text content (prevents false-positive fixes)
+    if !edges_are_fixable(&*grid, r, c, r2, c2) {
+        return false;
+    }
 
-    // All 4 corners located — apply fixes
+    // All 4 corners located and edges validated — apply fixes
     let tl = '┌';
 
     // Fix corners
@@ -216,7 +322,14 @@ fn fix_double_box(grid: &mut [Vec<char>], r: usize, c: usize) -> bool {
         return false;
     }
 
-    if grid_get(grid, r2, c2).is_none() {
+    // Check BR position has a box corner (prevents false-positive matching)
+    match grid_get(grid, r2, c2) {
+        Some(ch) if is_box_corner(ch) => {}
+        _ => return false,
+    }
+
+    // Validate edges don't cross text content (prevents false-positive fixes)
+    if !edges_are_fixable(&*grid, r, c, r2, c2) {
         return false;
     }
 
@@ -418,35 +531,36 @@ mod tests {
 
     #[test]
     fn fix_broken_top_edge() {
-        let input = "┌─X┐\n│  │\n└──┘";
+        let input = "┌─═┐\n│  │\n└──┘";
         let expected = "┌──┐\n│  │\n└──┘";
         assert_eq!(fix(input), expected);
     }
 
     #[test]
     fn fix_broken_bottom_edge() {
-        let input = "┌──┐\n│  │\n└─X┘";
+        let input = "┌──┐\n│  │\n└─═┘";
         let expected = "┌──┐\n│  │\n└──┘";
         assert_eq!(fix(input), expected);
     }
 
     #[test]
     fn fix_broken_left_edge() {
-        let input = "┌──┐\nX  │\n└──┘";
+        let input = "┌──┐\n═  │\n└──┘";
         let expected = "┌──┐\n│  │\n└──┘";
         assert_eq!(fix(input), expected);
     }
 
     #[test]
     fn fix_broken_right_edge() {
-        let input = "┌──┐\n│  X\n└──┘";
+        let input = "┌──┐\n│  ═\n└──┘";
         let expected = "┌──┐\n│  │\n└──┘";
         assert_eq!(fix(input), expected);
     }
 
     #[test]
-    fn fix_missing_bottom_right_corner() {
-        let input = "┌──┐\n│  │\n└──X";
+    fn fix_wrong_style_bottom_right_corner() {
+        // ╝ is a corner char (wrong style) — fixer replaces with ┘
+        let input = "┌──┐\n│  │\n└──╝";
         let expected = "┌──┐\n│  │\n└──┘";
         assert_eq!(fix(input), expected);
     }
@@ -475,7 +589,7 @@ mod tests {
 
     #[test]
     fn fix_multiple_broken_top_edge_chars() {
-        let input = "┌XXXX┐\n│    │\n└────┘";
+        let input = "┌════┐\n│    │\n└────┘";
         let expected = "┌────┐\n│    │\n└────┘";
         assert_eq!(fix(input), expected);
     }
@@ -491,28 +605,28 @@ mod tests {
 
     #[test]
     fn fix_double_broken_top_edge() {
-        let input = "╔═X╗\n║  ║\n╚══╝";
+        let input = "╔═─╗\n║  ║\n╚══╝";
         let expected = "╔══╗\n║  ║\n╚══╝";
         assert_eq!(fix(input), expected);
     }
 
     #[test]
     fn fix_double_broken_bottom_edge() {
-        let input = "╔══╗\n║  ║\n╚═X╝";
+        let input = "╔══╗\n║  ║\n╚═─╝";
         let expected = "╔══╗\n║  ║\n╚══╝";
         assert_eq!(fix(input), expected);
     }
 
     #[test]
     fn fix_double_broken_left_edge() {
-        let input = "╔══╗\nX  ║\n╚══╝";
+        let input = "╔══╗\n─  ║\n╚══╝";
         let expected = "╔══╗\n║  ║\n╚══╝";
         assert_eq!(fix(input), expected);
     }
 
     #[test]
     fn fix_double_broken_right_edge() {
-        let input = "╔══╗\n║  X\n╚══╝";
+        let input = "╔══╗\n║  ─\n╚══╝";
         let expected = "╔══╗\n║  ║\n╚══╝";
         assert_eq!(fix(input), expected);
     }
@@ -556,7 +670,7 @@ mod tests {
     #[test]
     fn preserves_junction_on_top_edge() {
         // ┬ is valid on top edge
-        let input = "┌─┬X┐\n│ │ │\n└─┴─┘";
+        let input = "┌─┬═┐\n│ │ │\n└─┴─┘";
         let expected = "┌─┬─┐\n│ │ │\n└─┴─┘";
         assert_eq!(fix(input), expected);
     }
@@ -564,7 +678,7 @@ mod tests {
     #[test]
     fn preserves_junction_on_left_edge() {
         // ├ is valid on left edge
-        let input = "┌──┐\n├──┤\nX  │\n└──┘";
+        let input = "┌──┐\n├──┤\n═  │\n└──┘";
         let expected = "┌──┐\n├──┤\n│  │\n└──┘";
         assert_eq!(fix(input), expected);
     }
@@ -573,7 +687,7 @@ mod tests {
 
     #[test]
     fn fix_then_lint_zero_diagnostics() {
-        let input = "┌─X┐\n│  │\n└──┘";
+        let input = "┌─═┐\n│  │\n└──┘";
         let fixed = fix(input);
         let diags = crate::lint_box_corners::BoxCornerEdgeLint.check(&fixed);
         assert!(
@@ -584,7 +698,7 @@ mod tests {
 
     #[test]
     fn fix_preserves_interior_content() {
-        let input = "┌────X┐\n│hello│\n│world│\n└─────┘";
+        let input = "┌────═┐\n│hello│\n│world│\n└─────┘";
         let fixed = fix(input);
         assert!(fixed.contains("hello"));
         assert!(fixed.contains("world"));
@@ -600,29 +714,43 @@ mod tests {
     #[test]
     fn demo_diagram_round_trip() {
         let input = include_str!("../examples/demo-flow-diagram.txt");
-        let fixed = fix(input);
-        // Valid boxes must remain unchanged
-        let mut ir = DiagramIR::new(input);
-        detect_boxes(&mut ir);
-        let valid_count = ir
-            .nodes
-            .iter()
-            .filter(|n| matches!(n, Node::Box { .. }))
-            .count();
-        assert!(
-            valid_count >= 3,
-            "expected >= 3 valid boxes, got {valid_count}"
-        );
+        assert_eq!(fix(input), input, "demo diagram must be unchanged by fix");
+    }
 
-        // After fixing, re-detect boxes — should still find at least as many
-        let mut ir2 = DiagramIR::new(&fixed);
-        detect_boxes(&mut ir2);
-        let fixed_count = ir2
-            .nodes
-            .iter()
-            .filter(|n| matches!(n, Node::Box { .. }))
-            .count();
-        assert!(fixed_count >= valid_count);
+    // == Nested box round-trip ================================================
+
+    #[test]
+    fn round_trip_nested_boxes_with_text() {
+        let input = "\
+┌────────────────────┐
+│  ┌──────────────┐  │
+│  │  Workflow:   │  │
+│  │  1. Render   │  │
+│  └──────────────┘  │
+└────────────────────┘";
+        assert_eq!(fix(input), input);
+    }
+
+    #[test]
+    fn round_trip_box_with_text_labels_outside() {
+        let input = "\
+┌──────────────────┐
+│ AWS (us-east-1)  │
+│ ┌────────┐       │
+│ │ S3     │       │
+│ │ files  │       │
+│ └────────┘       │
+└──────────────────┘";
+        assert_eq!(fix(input), input);
+    }
+
+    // == Text on edges rejected ===============================================
+
+    #[test]
+    fn skip_fix_when_edge_crosses_text() {
+        // Orphan ┌ whose top edge crosses text — should not be fixed
+        let input = "┌hello─┐\n│      │\n└──────┘";
+        assert_eq!(fix(input), input);
     }
 
     // == Helper function tests ================================================
@@ -787,6 +915,46 @@ mod tests {
     #[test]
     fn fix_double_box_br_off_grid() {
         let mut grid = input_to_mut_grid("╔══╗\n║  ║\n╚═");
+        assert!(!fix_double_box(&mut grid, 0, 0));
+    }
+
+    // == Edge content validation tests ========================================
+
+    #[test]
+    fn test_is_fixable_edge_char() {
+        assert!(is_fixable_edge_char(' '));
+        assert!(is_fixable_edge_char('─'));
+        assert!(is_fixable_edge_char('│'));
+        assert!(is_fixable_edge_char('═'));
+        assert!(is_fixable_edge_char('║'));
+        assert!(is_fixable_edge_char('┼'));
+        assert!(!is_fixable_edge_char('a'));
+        assert!(!is_fixable_edge_char('1'));
+        assert!(!is_fixable_edge_char('-'));
+        assert!(!is_fixable_edge_char('>'));
+    }
+
+    #[test]
+    fn test_edges_are_fixable_clean_box() {
+        let grid = input_to_mut_grid("┌──┐\n│  │\n└──┘");
+        assert!(edges_are_fixable(&grid, 0, 0, 2, 3));
+    }
+
+    #[test]
+    fn test_edges_are_fixable_rejects_text() {
+        let grid = input_to_mut_grid("┌text┐\n│    │\n└────┘");
+        assert!(!edges_are_fixable(&grid, 0, 0, 2, 5));
+    }
+
+    #[test]
+    fn fix_single_box_rejects_text_on_edge() {
+        let mut grid = input_to_mut_grid("┌text┐\n│    │\n└────┘");
+        assert!(!fix_single_box(&mut grid, 0, 0));
+    }
+
+    #[test]
+    fn fix_double_box_rejects_text_on_edge() {
+        let mut grid = input_to_mut_grid("╔text╗\n║    ║\n╚════╝");
         assert!(!fix_double_box(&mut grid, 0, 0));
     }
 }
