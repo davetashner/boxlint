@@ -1698,8 +1698,7 @@ mod tests {
 
     #[test]
     fn parse_lint_rule_flag() {
-        let cli =
-            Cli::try_parse_from(["boxlint", "lint", "--rule", "box-corner-edge"]).unwrap();
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--rule", "box-corner-edge"]).unwrap();
         match cli.command {
             Command::Lint { rule, ignore, .. } => {
                 assert_eq!(rule, vec!["box-corner-edge"]);
@@ -1711,13 +1710,9 @@ mod tests {
 
     #[test]
     fn parse_lint_rule_comma_separated() {
-        let cli = Cli::try_parse_from([
-            "boxlint",
-            "lint",
-            "--rule",
-            "box-corner-edge,arrow-connect",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["boxlint", "lint", "--rule", "box-corner-edge,arrow-connect"])
+                .unwrap();
         match cli.command {
             Command::Lint { rule, .. } => {
                 assert_eq!(rule, vec!["box-corner-edge", "arrow-connect"]);
@@ -1747,8 +1742,7 @@ mod tests {
 
     #[test]
     fn parse_lint_ignore_flag() {
-        let cli =
-            Cli::try_parse_from(["boxlint", "lint", "--ignore", "arrow-connect"]).unwrap();
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--ignore", "arrow-connect"]).unwrap();
         match cli.command {
             Command::Lint { rule, ignore, .. } => {
                 assert!(rule.is_empty());
@@ -1760,8 +1754,7 @@ mod tests {
 
     #[test]
     fn parse_fix_rule_flag() {
-        let cli =
-            Cli::try_parse_from(["boxlint", "fix", "--rule", "box-content-sizing"]).unwrap();
+        let cli = Cli::try_parse_from(["boxlint", "fix", "--rule", "box-content-sizing"]).unwrap();
         match cli.command {
             Command::Fix { rule, ignore, .. } => {
                 assert_eq!(rule, vec!["box-content-sizing"]);
@@ -1791,10 +1784,7 @@ mod tests {
     #[test]
     fn filter_rule_retains_only_matching() {
         let mut registry = RuleRegistry::new();
-        let rc = registry.filter(
-            &["box-corner-edge".to_string()],
-            &[],
-        );
+        let rc = registry.filter(&["box-corner-edge".to_string()], &[]);
         assert_eq!(rc, 0);
         assert_eq!(registry.lint_rules.len(), 1);
         assert_eq!(registry.lint_rules[0].name(), "box-corner-edge");
@@ -1807,14 +1797,14 @@ mod tests {
         let mut registry = RuleRegistry::new();
         let original_lint_count = registry.lint_rules.len();
         let original_fixer_count = registry.fixers.len();
-        let rc = registry.filter(
-            &[],
-            &["arrow-connect".to_string()],
-        );
+        let rc = registry.filter(&[], &["arrow-connect".to_string()]);
         assert_eq!(rc, 0);
         assert_eq!(registry.lint_rules.len(), original_lint_count - 1);
         assert_eq!(registry.fixers.len(), original_fixer_count - 1);
-        assert!(registry.lint_rules.iter().all(|r| r.name() != "arrow-connect"));
+        assert!(registry
+            .lint_rules
+            .iter()
+            .all(|r| r.name() != "arrow-connect"));
         assert!(registry.fixers.iter().all(|f| f.name() != "arrow-connect"));
     }
 
@@ -1844,10 +1834,7 @@ mod tests {
         let mut registry = RuleRegistry::new();
         let lint_count = registry.lint_rules.len();
         // Unknown name should warn on stderr but still return 0
-        let rc = registry.filter(
-            &["nonexistent-rule".to_string()],
-            &[],
-        );
+        let rc = registry.filter(&["nonexistent-rule".to_string()], &[]);
         assert_eq!(rc, 0);
         // All rules filtered out since none match
         assert_eq!(registry.lint_rules.len(), 0);
@@ -1860,7 +1847,10 @@ mod tests {
         // box-content-alignment is a lint name, box-content-sizing is a fixer name
         let mut registry = RuleRegistry::new();
         let rc = registry.filter(
-            &["box-content-alignment".to_string(), "box-content-sizing".to_string()],
+            &[
+                "box-content-alignment".to_string(),
+                "box-content-sizing".to_string(),
+            ],
             &[],
         );
         assert_eq!(rc, 0);
