@@ -1,3 +1,4 @@
+pub mod detect_arrows;
 pub mod detect_boxes;
 pub mod grid;
 
