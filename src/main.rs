@@ -1750,6 +1750,19 @@ mod tests {
         assert!(result.contains("-b"));
     }
 
+    #[test]
+    fn unified_diff_with_trailing_context() {
+        // A change followed by 3+ matching lines exercises the consecutive_match
+        // break and context-after paths in unified_diff.
+        let original = "a\nb\nc\nd\ne\nf\ng\n";
+        let modified = "a\nX\nc\nd\ne\nf\ng\n";
+        let result = unified_diff(original, modified, "ctx.txt");
+        assert!(result.contains("-b"));
+        assert!(result.contains("+X"));
+        // Context after the hunk should include matching lines
+        assert!(result.contains(" c"));
+    }
+
     // --rule / --ignore tests
 
     #[test]
