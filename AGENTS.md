@@ -1,40 +1,106 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+## Project Overview
 
-## Quick Reference
+**boxlint** is a Rust CLI that lints and auto-fixes Unicode box-drawing diagrams. It detects misaligned corners, broken edges, overflowing text, and disconnected arrows.
+
+- Language: Rust (edition 2021, MSRV 1.75)
+- Build: `cargo build --all-targets`
+- Test: `cargo test`
+- Lint: `cargo clippy --all-targets -- -D warnings`
+- Format: `cargo fmt --all --check`
+
+## CI Requirements — Read Before Committing
+
+Pull requests are required. All CI jobs must pass before merge. Run these locally before pushing:
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
-bd sync               # Sync with git
+cargo build --all-targets
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
-## Landing the Plane (Session Completion)
+### Commit Messages
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+Every commit must follow **conventional commits** format. CI rejects non-conforming messages on PRs.
 
-**MANDATORY WORKFLOW:**
+```
+<type>(<optional scope>): <description>
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd sync
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+Valid types: feat, fix, chore, docs, test, refactor, style, perf, ci, build, revert
+```
 
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+Examples:
+- `feat: add box detection parser`
+- `fix(linter): correct off-by-one in corner alignment check`
+- `test: add edge cases for nested box detection`
+- `chore: update dependencies`
 
+### Clippy
+
+CI runs `cargo clippy -- -D warnings` — all warnings are errors. Common pitfalls:
+- Use `if let` instead of single-arm `match`
+- Avoid `clone()` when a reference suffices
+- Use `unwrap_or_else` instead of `unwrap_or` with expensive defaults
+- Prefer `is_empty()` over `len() == 0`
+- Don't leave unused imports, variables, or dead code
+
+### Formatting
+
+CI runs `cargo fmt --all --check`. Do not mix formatting changes with functional changes. If reformatting is needed, make it a separate `style:` commit.
+
+### MSRV Compatibility
+
+Code must compile on Rust 1.75. Avoid features stabilized after 1.75. If unsure, check the [Rust release notes](https://releases.rs/).
+
+## Workflow
+
+### Branch Strategy
+
+Always work on a feature branch, never commit directly to `main`.
+
+```bash
+git checkout -b feat/my-feature origin/main
+# ... work ...
+git push -u origin feat/my-feature
+gh pr create
+```
+
+### Issue Tracking (beads)
+
+This project uses **bd** (beads) for issue tracking.
+
+```bash
+bd ready                              # Find available work
+bd show <id>                          # View issue details
+bd update <id> --status in_progress   # Claim work
+bd close <id> --reason "..."          # Complete work
+bd sync                               # Sync with git
+```
+
+Reference beads issue IDs in commit messages: `feat: add parser [boxlint-9dc]`
+
+### Session Completion
+
+When ending a work session, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+1. **Run quality gates** — `cargo build && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --all --check`
+2. **File issues** for remaining work with `bd create`
+3. **Update issue status** — close finished work, update in-progress items
+4. **Sync and push** — `bd sync && git push`
+5. **Verify** — `git status` must show up to date with origin
+
+## Project Structure
+
+```
+src/
+  main.rs       # CLI entry point
+  parser.rs     # Grid model and diagram IR (planned)
+  linter.rs     # Lint rule engine (planned)
+  fixer.rs      # Auto-fix engine (planned)
+examples/
+  demo-flow-diagram.txt   # Reference test diagram
+.beads/                   # Issue tracking database
+.github/workflows/ci.yml  # CI pipeline
+```
