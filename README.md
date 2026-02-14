@@ -13,7 +13,13 @@ A linter and auto-fixer for Unicode box-drawing diagrams.
 
 A [Rust toolchain](https://rustup.rs/) (1.75 or later).
 
-### From source (cargo install)
+### From crates.io
+
+```bash
+cargo install boxlint
+```
+
+### From source (git)
 
 ```bash
 cargo install --git https://github.com/davetashner/boxlint.git

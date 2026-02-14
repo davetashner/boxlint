@@ -11,6 +11,8 @@ pub mod lint_adjacent_boxes;
 pub mod lint_arrow_connect;
 pub mod lint_box_content;
 pub mod lint_box_corners;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -48,6 +50,10 @@ pub enum Command {
         /// Suppress warnings, show only errors
         #[arg(short, long)]
         quiet: bool,
+
+        /// Filename to use in diagnostics when reading from stdin
+        #[arg(long)]
+        stdin_filename: Option<String>,
     },
     /// Auto-fix a file or stdin
     Fix {
@@ -65,7 +71,22 @@ pub enum Command {
         /// Prefix to strip from each line before processing
         #[arg(long)]
         strip_prefix: Option<String>,
+
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: OutputFormat,
+
+        /// Show unified diff instead of fixed output
+        #[arg(long)]
+        diff: bool,
+
+        /// Filename to use in diagnostics when reading from stdin
+        #[arg(long)]
+        stdin_filename: Option<String>,
     },
+    /// Start MCP (Model Context Protocol) server over stdio
+    #[cfg(feature = "mcp")]
+    Mcp,
 }
 
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
@@ -230,16 +251,26 @@ fn collect_files(path: &str) -> io::Result<Vec<String>> {
 
 /// Load file inputs from a path, or read from stdin if `path` is None.
 #[cfg(not(tarpaulin_include))]
-fn load_inputs(path: Option<&str>) -> Result<Vec<(String, String)>, i32> {
+fn load_inputs(
+    path: Option<&str>,
+    stdin_filename: Option<&str>,
+) -> Result<Vec<(String, String)>, i32> {
+    if path.is_some() && stdin_filename.is_some() {
+        eprintln!("boxlint: --stdin-filename cannot be used with a file argument");
+        return Err(2);
+    }
     match path {
         Some(p) => load_file_inputs(p),
-        None => match read_stdin() {
-            Ok(content) => Ok(vec![("<stdin>".to_string(), content)]),
-            Err(e) => {
-                eprintln!("boxlint: stdin: {e}");
-                Err(2)
+        None => {
+            let name = stdin_filename.unwrap_or("<stdin>").to_string();
+            match read_stdin() {
+                Ok(content) => Ok(vec![(name, content)]),
+                Err(e) => {
+                    eprintln!("boxlint: stdin: {e}");
+                    Err(2)
+                }
             }
-        },
+        }
     }
 }
 
@@ -269,8 +300,9 @@ fn run_lint(
     format: &OutputFormat,
     quiet: bool,
     registry: &RuleRegistry,
+    stdin_filename: Option<&str>,
 ) -> i32 {
-    let inputs = match load_inputs(path) {
+    let inputs = match load_inputs(path, stdin_filename) {
         Ok(inputs) => inputs,
         Err(code) => return code,
     };
@@ -330,25 +362,34 @@ fn run_lint(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_fix(
     path: Option<&str>,
     in_place: bool,
     _quiet: bool,
     registry: &RuleRegistry,
     prefix: Option<&str>,
+    format: &OutputFormat,
+    diff: bool,
+    stdin_filename: Option<&str>,
 ) -> i32 {
     if in_place && path.is_none() {
         eprintln!("boxlint: --in-place requires a file argument");
         return 2;
     }
+    if diff && in_place {
+        eprintln!("boxlint: --diff and --in-place are mutually exclusive");
+        return 2;
+    }
 
-    let inputs = match load_inputs(path) {
+    let inputs = match load_inputs(path, stdin_filename) {
         Ok(inputs) => inputs,
         Err(code) => return code,
     };
 
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
+    let mut any_changed = false;
     for (file, content) in &inputs {
         let output = if let Some(pfx) = prefix {
             // Explicit prefix: strip, fix, restore.
@@ -382,7 +423,26 @@ fn run_fix(
                 result_lines.join("\n")
             }
         };
-        if in_place {
+
+        let changed = output != *content;
+        if changed {
+            any_changed = true;
+        }
+
+        if diff {
+            if changed {
+                let diff_text = unified_diff(content, &output, file);
+                let _ = stdout.write_all(diff_text.as_bytes());
+            }
+        } else if *format == OutputFormat::Json {
+            let json_obj = serde_json::json!({
+                "file": file,
+                "changed": changed,
+                "fixed_text": output,
+                "original_text": content,
+            });
+            let _ = writeln!(stdout, "{}", json_obj);
+        } else if in_place {
             if let Err(e) = fs::write(file, &output) {
                 eprintln!("boxlint: {file}: {e}");
                 return 2;
@@ -392,7 +452,102 @@ fn run_fix(
         }
     }
 
-    0
+    if diff && any_changed {
+        1
+    } else {
+        0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diff helper
+// ---------------------------------------------------------------------------
+
+fn unified_diff(original: &str, modified: &str, filename: &str) -> String {
+    let orig_lines: Vec<&str> = original.lines().collect();
+    let mod_lines: Vec<&str> = modified.lines().collect();
+    let mut result = String::new();
+    result.push_str(&format!("--- {filename}\n"));
+    result.push_str(&format!("+++ {filename}\n"));
+
+    // Simple line-by-line diff: find contiguous changed regions (hunks).
+    let max_len = std::cmp::max(orig_lines.len(), mod_lines.len());
+    let mut i = 0;
+    while i < max_len {
+        // Skip matching lines.
+        if i < orig_lines.len() && i < mod_lines.len() && orig_lines[i] == mod_lines[i] {
+            i += 1;
+            continue;
+        }
+
+        // Found a difference — build a hunk.
+        let hunk_start = i.saturating_sub(3);
+
+        // Extend through differing lines. Walk both sides in lockstep,
+        // collecting until 3 consecutive matching lines or end of input.
+        let (orig_end, mod_end) = {
+            let mut consecutive_match = 0;
+            let mut oi = i;
+            let mut mi = i;
+            while oi < orig_lines.len() || mi < mod_lines.len() {
+                if oi < orig_lines.len() && mi < mod_lines.len() && orig_lines[oi] == mod_lines[mi]
+                {
+                    consecutive_match += 1;
+                    oi += 1;
+                    mi += 1;
+                    if consecutive_match >= 3 {
+                        break;
+                    }
+                } else {
+                    consecutive_match = 0;
+                    if oi < orig_lines.len() {
+                        oi += 1;
+                    }
+                    if mi < mod_lines.len() {
+                        mi += 1;
+                    }
+                }
+            }
+            (oi, mi)
+        };
+
+        // Add context after the hunk (up to 3 lines).
+        let orig_ctx_end = std::cmp::min(orig_end + 3, orig_lines.len());
+        let mod_ctx_end = std::cmp::min(mod_end + 3, mod_lines.len());
+
+        let orig_count = orig_ctx_end - hunk_start;
+        let mod_count = mod_ctx_end - hunk_start;
+        result.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            hunk_start + 1,
+            orig_count,
+            hunk_start + 1,
+            mod_count
+        ));
+
+        // Context before.
+        for line in &orig_lines[hunk_start..i] {
+            result.push_str(&format!(" {line}\n"));
+        }
+
+        // Changed region: show removed then added.
+        for line in &orig_lines[i..std::cmp::min(orig_end, orig_lines.len())] {
+            result.push_str(&format!("-{line}\n"));
+        }
+        for line in &mod_lines[i..std::cmp::min(mod_end, mod_lines.len())] {
+            result.push_str(&format!("+{line}\n"));
+        }
+
+        // Context after.
+        let ctx_after_start = std::cmp::min(orig_end, orig_lines.len());
+        for line in &orig_lines[ctx_after_start..orig_ctx_end] {
+            result.push_str(&format!(" {line}\n"));
+        }
+
+        i = std::cmp::max(orig_ctx_end, mod_ctx_end);
+    }
+
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -409,19 +564,42 @@ fn main() {
             path,
             format,
             quiet,
-        } => run_lint(path.as_deref(), format, *quiet, &registry),
+            stdin_filename,
+        } => run_lint(
+            path.as_deref(),
+            format,
+            *quiet,
+            &registry,
+            stdin_filename.as_deref(),
+        ),
         Command::Fix {
             path,
             in_place,
             quiet,
             strip_prefix,
+            format,
+            diff,
+            stdin_filename,
         } => run_fix(
             path.as_deref(),
             *in_place,
             *quiet,
             &registry,
             strip_prefix.as_deref(),
+            format,
+            *diff,
+            stdin_filename.as_deref(),
         ),
+        #[cfg(feature = "mcp")]
+        Command::Mcp => {
+            let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+            if let Err(e) = rt.block_on(mcp::run_mcp_server()) {
+                eprintln!("boxlint: MCP server error: {e}");
+                2
+            } else {
+                0
+            }
+        }
     };
 
     process::exit(code);
@@ -443,10 +621,12 @@ mod tests {
                 path,
                 format,
                 quiet,
+                stdin_filename,
             } => {
                 assert!(path.is_none());
                 assert_eq!(format, OutputFormat::Text);
                 assert!(!quiet);
+                assert!(stdin_filename.is_none());
             }
             _ => panic!("expected Lint command"),
         }
@@ -613,6 +793,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -627,6 +808,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 2);
     }
@@ -634,7 +816,16 @@ mod tests {
     #[test]
     fn fix_in_place_without_file_returns_two() {
         let registry = RuleRegistry::new();
-        let code = run_fix(None, true, false, &registry, None);
+        let code = run_fix(
+            None,
+            true,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+        );
         assert_eq!(code, 2);
     }
 
@@ -646,6 +837,9 @@ mod tests {
             false,
             false,
             &registry,
+            None,
+            &OutputFormat::Text,
+            false,
             None,
         );
         assert_eq!(code, 2);
@@ -678,6 +872,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -692,7 +887,16 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(Some(file.to_str().unwrap()), false, false, &registry, None);
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -706,7 +910,16 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry, None);
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            true,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+        );
         assert_eq!(code, 0);
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "hello\n");
@@ -881,6 +1094,7 @@ mod tests {
             &OutputFormat::Json,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -902,6 +1116,7 @@ mod tests {
             &OutputFormat::Text,
             true,
             &registry,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -923,6 +1138,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -945,6 +1161,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -967,6 +1184,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 1);
 
@@ -988,6 +1206,9 @@ mod tests {
             false,
             &registry,
             Some("// "),
+            &OutputFormat::Text,
+            false,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -1004,7 +1225,16 @@ mod tests {
         fs::write(&file, "code here\n// ┌──┐\n// │hi│\n// └──┘\nmore code\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(Some(file.to_str().unwrap()), false, false, &registry, None);
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -1020,7 +1250,16 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.fixers.push(Box::new(TestFixer));
-        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry, None);
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            true,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+        );
         assert_eq!(code, 0);
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "good text");
@@ -1057,6 +1296,7 @@ mod tests {
             &OutputFormat::Text,
             false,
             &registry,
+            None,
         );
         assert_eq!(code, 0);
 
@@ -1071,7 +1311,16 @@ mod tests {
         fs::write(dir.join("a.txt"), "hello").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(Some(dir.to_str().unwrap()), false, false, &registry, None);
+        let code = run_fix(
+            Some(dir.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -1119,7 +1368,16 @@ mod tests {
             let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o444));
         }
         let registry = RuleRegistry::new();
-        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry, None);
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            true,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+        );
         // Restore permissions for cleanup
         #[cfg(unix)]
         {
@@ -1140,9 +1398,220 @@ mod tests {
         fs::write(&file, "code\n// ┌──┐\n// │hi│\n// └──┘\nmore\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry, None);
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            true,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // --stdin-filename tests
+    #[test]
+    fn parse_lint_stdin_filename() {
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--stdin-filename", "foo.txt"]).unwrap();
+        match cli.command {
+            Command::Lint {
+                stdin_filename,
+                path,
+                ..
+            } => {
+                assert_eq!(stdin_filename.as_deref(), Some("foo.txt"));
+                assert!(path.is_none());
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn parse_fix_stdin_filename() {
+        let cli = Cli::try_parse_from(["boxlint", "fix", "--stdin-filename", "bar.txt"]).unwrap();
+        match cli.command {
+            Command::Fix {
+                stdin_filename,
+                path,
+                ..
+            } => {
+                assert_eq!(stdin_filename.as_deref(), Some("bar.txt"));
+                assert!(path.is_none());
+            }
+            _ => panic!("expected Fix command"),
+        }
+    }
+
+    // --diff tests
+    #[test]
+    fn parse_fix_diff_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "fix", "--diff"]).unwrap();
+        match cli.command {
+            Command::Fix { diff, .. } => {
+                assert!(diff);
+            }
+            _ => panic!("expected Fix command"),
+        }
+    }
+
+    #[test]
+    fn fix_diff_and_in_place_error() {
+        let registry = RuleRegistry::new();
+        let code = run_fix(
+            Some("f.txt"),
+            true,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            true,
+            None,
+        );
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn fix_diff_no_changes() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_diff_clean");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("clean.txt");
+        fs::write(&file, "hello\n").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            true,
+            None,
+        );
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fix_diff_with_changes() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_diff_chg");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("broken.txt");
+        fs::write(&file, "bad text\n").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            true,
+            None,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // --format json for fix tests
+    #[test]
+    fn parse_fix_format_json() {
+        let cli = Cli::try_parse_from(["boxlint", "fix", "--format", "json"]).unwrap();
+        match cli.command {
+            Command::Fix { format, .. } => {
+                assert_eq!(format, OutputFormat::Json);
+            }
+            _ => panic!("expected Fix command"),
+        }
+    }
+
+    #[test]
+    fn fix_json_no_changes() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_json_clean");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("clean.txt");
+        fs::write(&file, "hello\n").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Json,
+            false,
+            None,
+        );
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fix_json_with_changes() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_json_chg");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("broken.txt");
+        fs::write(&file, "bad text\n").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Json,
+            false,
+            None,
+        );
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // unified_diff tests
+    #[test]
+    fn unified_diff_no_changes() {
+        let result = unified_diff("hello\nworld\n", "hello\nworld\n", "test.txt");
+        // Should only have headers, no hunks
+        assert!(result.starts_with("--- test.txt\n+++ test.txt\n"));
+        assert!(!result.contains("@@"));
+    }
+
+    #[test]
+    fn unified_diff_with_changes() {
+        let result = unified_diff(
+            "line1\nline2\nline3\n",
+            "line1\nchanged\nline3\n",
+            "test.txt",
+        );
+        assert!(result.contains("--- test.txt"));
+        assert!(result.contains("+++ test.txt"));
+        assert!(result.contains("@@"));
+        assert!(result.contains("-line2"));
+        assert!(result.contains("+changed"));
+    }
+
+    #[test]
+    fn unified_diff_addition() {
+        let result = unified_diff("a\nb\n", "a\nb\nc\n", "f.txt");
+        assert!(result.contains("+c"));
+    }
+
+    #[test]
+    fn unified_diff_deletion() {
+        let result = unified_diff("a\nb\nc\n", "a\nc\n", "f.txt");
+        assert!(result.contains("-b"));
     }
 }
