@@ -210,12 +210,7 @@ fn ensure_row_width(grid: &mut [Vec<char>], row: usize, needed_col: usize) {
     }
 }
 
-fn extend_box_top(
-    grid: &mut [Vec<char>],
-    bounds: &BoundingRect,
-    new_top: usize,
-    style: BoxStyle,
-) {
+fn extend_box_top(grid: &mut [Vec<char>], bounds: &BoundingRect, new_top: usize, style: BoxStyle) {
     let old_top = bounds.top_left.row;
     let left = bounds.top_left.col;
     let right = bounds.bottom_right.col;
@@ -364,7 +359,11 @@ impl Fixer for AdjacentBoxAlignmentFixer {
                 continue;
             }
 
-            let target_top = members.iter().map(|&i| boxes[i].top_left.row).min().unwrap();
+            let target_top = members
+                .iter()
+                .map(|&i| boxes[i].top_left.row)
+                .min()
+                .unwrap();
             let target_bottom = members
                 .iter()
                 .map(|&i| boxes[i].bottom_right.row)
@@ -392,12 +391,8 @@ impl Fixer for AdjacentBoxAlignmentFixer {
                 }
 
                 // Check shift limits
-                let top_shift = need_top
-                    .map(|t| b.top_left.row - t)
-                    .unwrap_or(0);
-                let bottom_shift = need_bottom
-                    .map(|bot| bot - b.bottom_right.row)
-                    .unwrap_or(0);
+                let top_shift = need_top.map(|t| b.top_left.row - t).unwrap_or(0);
+                let bottom_shift = need_bottom.map(|bot| bot - b.bottom_right.row).unwrap_or(0);
 
                 if top_shift > MAX_SHIFT || bottom_shift > MAX_SHIFT {
                     continue;
@@ -408,7 +403,13 @@ impl Fixer for AdjacentBoxAlignmentFixer {
                 let right = b.bottom_right.col;
 
                 if let Some(new_top) = need_top {
-                    if !region_is_clear(&grid, new_top, b.top_left.row.saturating_sub(1), left, right) {
+                    if !region_is_clear(
+                        &grid,
+                        new_top,
+                        b.top_left.row.saturating_sub(1),
+                        left,
+                        right,
+                    ) {
                         continue;
                     }
                 }
@@ -417,13 +418,7 @@ impl Fixer for AdjacentBoxAlignmentFixer {
                     // For bottom extension, rows beyond grid are fine (will be appended)
                     let check_end = new_bottom.min(grid.len().saturating_sub(1));
                     if b.bottom_right.row < check_end
-                        && !region_is_clear(
-                            &grid,
-                            b.bottom_right.row + 1,
-                            check_end,
-                            left,
-                            right,
-                        )
+                        && !region_is_clear(&grid, b.bottom_right.row + 1, check_end, left, right)
                     {
                         continue;
                     }

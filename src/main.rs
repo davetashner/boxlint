@@ -149,9 +149,9 @@ impl RuleRegistry {
         registry
             .fixers
             .push(Box::new(crate::fix_box_corners::BoxCornerEdgeFixer));
-        registry
-            .fixers
-            .push(Box::new(crate::fix_adjacent_boxes::AdjacentBoxAlignmentFixer));
+        registry.fixers.push(Box::new(
+            crate::fix_adjacent_boxes::AdjacentBoxAlignmentFixer,
+        ));
         registry
     }
 
