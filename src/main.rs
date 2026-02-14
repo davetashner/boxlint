@@ -142,9 +142,9 @@ impl RuleRegistry {
         registry
             .lint_rules
             .push(Box::new(crate::lint_box_corners::BoxCornerEdgeLint));
-        registry
-            .lint_rules
-            .push(Box::new(crate::lint_adjacent_boxes::AdjacentBoxAlignmentLint));
+        registry.lint_rules.push(Box::new(
+            crate::lint_adjacent_boxes::AdjacentBoxAlignmentLint,
+        ));
         registry
             .fixers
             .push(Box::new(crate::fix_box_corners::BoxCornerEdgeFixer));

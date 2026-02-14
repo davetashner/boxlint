@@ -511,6 +511,8 @@ mod tests {
 └───┘";
         let diags = lint(input);
         // Boxes are still adjacent (arrows are not boxes)
-        assert!(diags.iter().any(|d| d.message.contains("bottom rows differ")));
+        assert!(diags
+            .iter()
+            .any(|d| d.message.contains("bottom rows differ")));
     }
 }
