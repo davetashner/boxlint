@@ -67,9 +67,13 @@ pub enum Command {
         #[arg(long)]
         fix: bool,
 
-        /// Write fixes back to the file instead of stdout (requires --fix)
+        /// Write fixes back to the file (default when --fix and a file are given)
         #[arg(short = 'i', long = "in-place")]
         in_place: bool,
+
+        /// Print fixed output to stdout even when a file is given (requires --fix)
+        #[arg(long)]
+        stdout: bool,
 
         /// Stop output after N diagnostics (exit code still reflects all)
         #[arg(long)]
@@ -88,9 +92,13 @@ pub enum Command {
         /// File or directory to fix (reads stdin if omitted)
         path: Option<String>,
 
-        /// Write fixes back to the file instead of stdout
+        /// Write fixes back to the file (default when a file is given)
         #[arg(short = 'i', long = "in-place")]
         in_place: bool,
+
+        /// Print fixed output to stdout even when a file is given
+        #[arg(long)]
+        stdout: bool,
 
         /// Suppress warnings, show only errors
         #[arg(short, long)]
@@ -124,10 +132,18 @@ pub enum Command {
         #[arg(long = "ext", value_delimiter = ',')]
         extra_extensions: Vec<String>,
     },
-    /// Check a file or stdin silently (exit 0 = clean, exit 1 = issues)
+    /// Check a file or stdin (exit 0 = clean, exit 1 = issues)
     Check {
         /// File or directory to check (reads stdin if omitted)
         path: Option<String>,
+
+        /// Suppress diagnostic output (exit code only)
+        #[arg(short, long)]
+        quiet: bool,
+
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: OutputFormat,
 
         /// Filename to use in diagnostics when reading from stdin
         #[arg(long)]
@@ -713,6 +729,8 @@ fn run_lint(
 
 fn run_check(
     path: Option<&str>,
+    quiet: bool,
+    format: &OutputFormat,
     registry: &RuleRegistry,
     stdin_filename: Option<&str>,
     max_errors: Option<usize>,
@@ -750,13 +768,38 @@ fn run_check(
 
     let has_errors = all_diags.iter().any(|d| d.level == Level::Error);
 
-    if let Some(limit) = max_errors {
+    if !quiet {
         let total_count = all_diags.len();
-        if total_count > limit {
-            let suppressed = total_count - limit;
-            let stderr = io::stderr();
-            let mut stderr = stderr.lock();
-            let _ = writeln!(stderr, "... and {suppressed} more diagnostics");
+        let display_diags: &[Diagnostic] = if let Some(limit) = max_errors {
+            if all_diags.len() > limit {
+                &all_diags[..limit]
+            } else {
+                &all_diags
+            }
+        } else {
+            &all_diags
+        };
+
+        let stderr = io::stderr();
+        let mut stderr = stderr.lock();
+        for d in display_diags {
+            match format {
+                OutputFormat::Text => {
+                    let _ = writeln!(stderr, "{d}");
+                }
+                OutputFormat::Json => {
+                    if let Ok(json) = serde_json::to_string(d) {
+                        let _ = writeln!(stderr, "{json}");
+                    }
+                }
+            }
+        }
+
+        if let Some(limit) = max_errors {
+            if total_count > limit {
+                let suppressed = total_count - limit;
+                let _ = writeln!(stderr, "... and {suppressed} more diagnostics");
+            }
         }
     }
 
@@ -976,6 +1019,7 @@ fn main() {
             ignore,
             fix,
             in_place,
+            stdout: to_stdout,
             max_errors,
             summary,
             extra_extensions,
@@ -985,6 +1029,13 @@ fn main() {
             if rc != 0 {
                 rc
             } else {
+                let effective_in_place = if *to_stdout {
+                    false
+                } else if *fix {
+                    *in_place || path.is_some()
+                } else {
+                    *in_place
+                };
                 run_lint(
                     path.as_deref(),
                     format,
@@ -992,7 +1043,7 @@ fn main() {
                     &registry,
                     stdin_filename.as_deref(),
                     *fix,
-                    *in_place,
+                    effective_in_place,
                     *max_errors,
                     *summary,
                     extra_extensions,
@@ -1002,6 +1053,7 @@ fn main() {
         Command::Fix {
             path,
             in_place,
+            stdout: to_stdout,
             quiet,
             strip_prefix,
             format,
@@ -1016,9 +1068,14 @@ fn main() {
             if rc != 0 {
                 rc
             } else {
+                let effective_in_place = if *to_stdout {
+                    false
+                } else {
+                    *in_place || path.is_some()
+                };
                 run_fix(
                     path.as_deref(),
-                    *in_place,
+                    effective_in_place,
                     *quiet,
                     &registry,
                     strip_prefix.as_deref(),
@@ -1031,6 +1088,8 @@ fn main() {
         }
         Command::Check {
             path,
+            quiet,
+            format,
             stdin_filename,
             rule,
             ignore,
@@ -1044,6 +1103,8 @@ fn main() {
             } else {
                 run_check(
                     path.as_deref(),
+                    *quiet,
+                    format,
                     &registry,
                     stdin_filename.as_deref(),
                     *max_errors,
@@ -1087,6 +1148,7 @@ mod tests {
                 ignore,
                 fix,
                 in_place,
+                stdout,
                 max_errors,
                 summary,
                 extra_extensions,
@@ -1101,6 +1163,7 @@ mod tests {
                 assert!(!summary);
                 assert!(!fix);
                 assert!(!in_place);
+                assert!(!stdout);
                 assert!(max_errors.is_none());
             }
             _ => panic!("expected Lint command"),
@@ -1147,11 +1210,13 @@ mod tests {
             Command::Fix {
                 path,
                 in_place,
+                stdout,
                 strip_prefix,
                 ..
             } => {
                 assert!(path.is_none());
                 assert!(!in_place);
+                assert!(!stdout);
                 assert!(strip_prefix.is_none());
             }
             _ => panic!("expected Fix command"),
@@ -1179,6 +1244,86 @@ mod tests {
             }
             _ => panic!("expected Fix command"),
         }
+    }
+
+    #[test]
+    fn parse_fix_stdout_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "fix", "foo.txt", "--stdout"]).unwrap();
+        match cli.command {
+            Command::Fix { stdout, .. } => {
+                assert!(stdout);
+            }
+            _ => panic!("expected Fix command"),
+        }
+    }
+
+    #[test]
+    fn parse_lint_stdout_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--fix", "--stdout", "foo.txt"]).unwrap();
+        match cli.command {
+            Command::Lint { stdout, fix, .. } => {
+                assert!(stdout);
+                assert!(fix);
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn fix_file_defaults_to_in_place() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_default_ip");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "bad text").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        // in_place=true simulates the effective_in_place computed in main()
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            true,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+            &[],
+        );
+        assert_eq!(code, 0);
+        let content = fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "good text");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fix_file_stdout_overrides_in_place() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_stdout_override");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "bad text").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        // in_place=false simulates --stdout overriding the default
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            None,
+            &OutputFormat::Text,
+            false,
+            None,
+            &[],
+        );
+        assert_eq!(code, 0);
+        // File should NOT have been modified (output went to stdout)
+        let content = fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "bad text");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2358,6 +2503,8 @@ mod tests {
         match cli.command {
             Command::Check {
                 path,
+                quiet,
+                format,
                 stdin_filename,
                 rule,
                 ignore,
@@ -2365,6 +2512,8 @@ mod tests {
                 extra_extensions,
             } => {
                 assert!(path.is_none());
+                assert!(!quiet);
+                assert_eq!(format, OutputFormat::Text);
                 assert!(stdin_filename.is_none());
                 assert!(rule.is_empty());
                 assert!(extra_extensions.is_empty());
@@ -2422,7 +2571,15 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2437,7 +2594,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(ErrorRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2448,6 +2613,8 @@ mod tests {
         let registry = RuleRegistry::new();
         let code = run_check(
             Some("/nonexistent/path/to/file.txt"),
+            false,
+            &OutputFormat::Text,
             &registry,
             None,
             None,
@@ -2464,7 +2631,15 @@ mod tests {
         fs::write(dir.join("b.txt"), "world").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(dir.to_str().unwrap()), &registry, None, None, &[]);
+        let code = run_check(
+            Some(dir.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2479,7 +2654,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(ErrorRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2493,7 +2676,15 @@ mod tests {
         fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2526,8 +2717,85 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(WarnOnlyRule));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_check_quiet() {
+        let cli = Cli::try_parse_from(["boxlint", "check", "-q"]).unwrap();
+        match cli.command {
+            Command::Check { quiet, .. } => {
+                assert!(quiet);
+            }
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_format_json() {
+        let cli = Cli::try_parse_from(["boxlint", "check", "--format", "json"]).unwrap();
+        match cli.command {
+            Command::Check { format, .. } => {
+                assert_eq!(format, OutputFormat::Json);
+            }
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn check_quiet_suppresses_output() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_quiet");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(ErrorRule));
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            true,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
+        // Still returns 1 (errors present), just no stderr output
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_json_format() {
+        let dir = std::env::temp_dir().join("boxlint_test_check_json");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(ErrorRule));
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Json,
+            &registry,
+            None,
+            None,
+            &[],
+        );
+        assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3056,7 +3324,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(2), &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            Some(2),
+            &[],
+        );
         // Exit code still reflects all errors
         assert_eq!(code, 1);
 
@@ -3072,7 +3348,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(3)));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(10), &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            Some(10),
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -3087,7 +3371,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -3102,7 +3394,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), &registry, None, Some(1), &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            Some(1),
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
