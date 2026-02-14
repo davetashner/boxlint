@@ -7,6 +7,30 @@ A linter and auto-fixer for Unicode box-drawing diagrams.
 [![CI](https://github.com/davetashner/boxlint/actions/workflows/ci.yml/badge.svg)](https://github.com/davetashner/boxlint/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/davetashner/boxlint/graph/badge.svg)](https://codecov.io/gh/davetashner/boxlint)
 
+## Installation
+
+### Prerequisites
+
+A [Rust toolchain](https://rustup.rs/) (1.75 or later).
+
+### From source (cargo install)
+
+```bash
+cargo install --git https://github.com/davetashner/boxlint.git
+```
+
+This builds and installs the `boxlint` binary to `~/.cargo/bin/`.
+
+### Build manually
+
+```bash
+git clone https://github.com/davetashner/boxlint.git
+cd boxlint
+cargo build --release
+```
+
+The binary will be at `target/release/boxlint`.
+
 ## Usage
 
 ```bash
@@ -53,13 +77,6 @@ Problems:
 - **Box corners and edges** — mismatched corner characters (`┌` with `╗`), gaps in edges
 - **Box content alignment** — text overflowing box boundaries, inconsistent alignment
 - **Arrow connections** — arrows that don't connect to box edges, misaligned segments
-
-## Building
-
-```bash
-cargo build
-cargo test
-```
 
 ## License
 
