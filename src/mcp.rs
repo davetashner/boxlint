@@ -223,6 +223,21 @@ mod tests {
     }
 
     #[test]
+    fn install_errors_when_mcp_servers_not_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+
+        let bad = serde_json::json!({
+            "mcpServers": "not-an-object"
+        });
+        std::fs::write(&settings_path, serde_json::to_string(&bad).unwrap()).unwrap();
+
+        let result = install_mcp_config_to(&settings_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("is not a JSON object"));
+    }
+
+    #[test]
     fn install_merges_into_existing_settings() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
