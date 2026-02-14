@@ -1,0 +1,8 @@
+[package]
+name = "boxlint"
+version = "0.1.0"
+edition = "2021"
+description = "A linter and auto-fixer for Unicode box-drawing diagrams"
+license = "MIT"
+
+[dependencies]

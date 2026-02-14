@@ -1,0 +1,134 @@
+
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                      Serverless Message Wall — End-to-End Flow                       │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+
+
+  INTENT LAYER                          AUTHORITY LAYER                    CLOUD LAYER
+  ════════════                          ═══════════════                    ═══════════
+
+
+  ┌─────────────────────┐   git push   ┌─────────────────────┐
+  │                     │ ────────────►│       GitHub         │
+  │   Developer Laptop  │              │                     │
+  │                     │              │  ┌────────────────┐ │
+  │   infra/base/       │              │  │  GA Workflow:   │ │
+  │    *.yaml.template  │              │  │                 │ │
+  │                     │              │  │  1. Render      │ │
+  │   config/dev.env    │              │  │     (envsubst)  │ │
+  │                     │              │  │  2. Validate    │ │
+  │   Claims = 8 fields │              │  │     (OPA)       │ │
+  │                     │              │  │  3. Publish     │ │
+  └─────────────────────┘              │  │     (cub CLI)   │ │
+                                       │  └───────┬─────────┘ │
+                                       └──────────┼───────────┘
+                                                  │
+                                         cub unit update
+                                                  │
+                                                  ▼
+                                       ┌─────────────────────┐
+                                       │      ConfigHub       │
+                                       │                      │
+                                       │  Space:              │
+                                       │    messagewall-dev   │
+                                       │                      │
+                                       │  Unit:               │
+                                       │    messagewall-dev   │
+                                       │    Rev 1 → 2 → 3    │
+                                       │                      │
+                                       │  (Authoritative      │
+                                       │   source of truth)   │
+                                       └──────────┬───────────┘
+                                                  │
+                                       CMP plugin fetches
+                                       HeadRevisionNum
+                                                  │
+                                                  │
+  ACTUATION LAYER (Kind Cluster)                  │
+  ══════════════════════════════                   │
+  ┌───────────────────────────────────────────────┼───────────────────────────────┐
+  │                                               │                               │
+  │  ┌──────────────────┐   ┌──────────────────┐  │                               │
+  │  │     Kyverno       │   │     ArgoCD       │◄─┘                               │
+  │  │                   │   │                  │                                  │
+  │  │  Mutate:          │◄──│  Auto-sync       │                                  │
+  │  │   add required    │   │  Prune           │                                  │
+  │  │   AWS tags        │   │  Self-heal       │                                  │
+  │  │                   │   └────────┬─────────┘                                  │
+  │  │  Validate:        │            │                                            │
+  │  │   reject if tags  │    applies Claim                                        │
+  │  │   missing         │    to cluster                                           │
+  │  └──────────────────┘            │                                            │
+  │            │                     ▼                                             │
+  │            │   ┌──────────────────────────────────┐   ┌─────────────────────┐  │
+  │            │   │          Crossplane               │   │   AWS Providers     │  │
+  │            │   │                                   │   │   (Upbound)         │  │
+  │            └──►│  XRD: ServerlessEventAppClaim     │   │                     │  │
+  │                │               │                   │   │   S3, DynamoDB,     │  │
+  │                │  Composition: serverless-event-app │──►│   Lambda, IAM,     │  │
+  │                │               │                   │   │   EventBridge       │  │
+  │                │  Expands 1 Claim → 17 Resources   │   └──────────┬──────────┘  │
+  │                └──────────────────────────────────┘              │             │
+  │                                                                  │             │
+  └──────────────────────────────────────────────────────────────────┼─────────────┘
+                                                                     │
+                                                            AWS API calls
+                                                                     │
+                                                                     ▼
+                                       ┌──────────────────────────────────────────┐
+                                       │            AWS  (us-east-1)              │
+                                       │                                          │
+                                       │  ┌──────────┐       ┌────────────────┐  │
+                                       │  │    S3     │       │   DynamoDB     │  │
+                                       │  │  static   │       │   messages     │  │
+                                       │  │  site +   │       │   table        │  │
+                                       │  │  artifacts│       └───────┬────────┘  │
+                                       │  └─────┬─────┘               │           │
+                                       │        │         ┌───────────┴────────┐  │
+                                       │        │         │    EventBridge     │  │
+                                       │        │         └───────────┬────────┘  │
+                                       │  ┌─────┴──────────┐  ┌──────┴─────────┐ │
+                                       │  │  Lambda:        │  │  Lambda:       │ │
+                                       │  │  api-handler    │  │  snapshot-     │ │
+                                       │  │  (POST)         │  │  writer        │ │
+                                       │  └────────────────┘  └────────────────┘ │
+                                       │                                          │
+                                       └──────────────────────────────────────────┘
+
+
+  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+
+
+  RUNTIME DATA FLOW (after provisioning)
+  ═══════════════════════════════════════
+
+  Browser ──POST──► Lambda (api-handler) ──► DynamoDB ──► EventBridge
+                                                                 │
+  Browser ◄──GET─── S3 (state.json) ◄── Lambda (snapshot-writer) ◄┘
+
+
+  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+
+
+  BREAK-GLASS ESCAPE HATCH (emergency changes)
+  ═════════════════════════════════════════════
+
+                                       ┌─────────────────────┐
+                                       │      ConfigHub       │
+                                       │  (source of truth)   │
+                                       └──────────▲───────────┘
+                                                  │
+                                       capture-drift-to-
+                                       confighub.sh
+                                                  │
+  ┌─────────────────────┐              ┌──────────┴───────────┐
+  │                     │   kubectl    │                      │         ┌──────────┐
+  │   SRE / Operator    │ ────────────►│   Actuator Cluster   │────────►│   AWS    │
+  │                     │   apply      │                      │         └──────────┘
+  │   (emergency only)  │              │   Kyverno still      │
+  │                     │              │   enforces policies   │
+  └─────────────────────┘              └──────────────────────┘
+                                                  │
+                                       ConfigHub → Git sync
+                                       creates PR to record
+                                       the out-of-band change
