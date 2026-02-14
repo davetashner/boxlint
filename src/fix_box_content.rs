@@ -250,9 +250,9 @@ fn repad_content(
             let left_pad = total_padding / 2;
             let right_pad = total_padding - left_pad;
             let mut v = Vec::with_capacity(new_interior);
-            v.extend(std::iter::repeat_n(' ', left_pad));
+            v.extend_from_slice(&vec![' '; left_pad]);
             v.extend(trimmed.chars());
-            v.extend(std::iter::repeat_n(' ', right_pad));
+            v.extend_from_slice(&vec![' '; right_pad]);
             v
         } else {
             // Left-aligned: 1 space + trimmed + fill
@@ -260,7 +260,7 @@ fn repad_content(
             v.push(' ');
             v.extend(trimmed.chars());
             let remaining = new_interior.saturating_sub(1 + trimmed.len());
-            v.extend(std::iter::repeat_n(' ', remaining));
+            v.extend_from_slice(&vec![' '; remaining]);
             v
         };
 
