@@ -15,7 +15,7 @@ include = ["src/**/*", "Cargo.toml", "LICENSE", "README.md"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)', 'cfg(feature, values("mcp"))'] }
 
 [features]
-default = []
+default = ["mcp"]
 mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 
 [dependencies]
@@ -28,3 +28,6 @@ schemars = { version = "1.0", optional = true }
 toml = "0.8"
 # Pin indexmap to a version compatible with MSRV 1.75
 indexmap = ">=2.0.0, <2.8.0"
+
+[dev-dependencies]
+tempfile = "3.25.0"
