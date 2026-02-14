@@ -6,20 +6,20 @@
 
   INTENT LAYER                          AUTHORITY LAYER                    CLOUD LAYER
   ════════════                          ═══════════════                    ═══════════
-
-
+  
+  
   ┌─────────────────────┐   git push   ┌─────────────────────┐
   │                     │ ────────────►│       GitHub         │
-  │   Developer Laptop  │              │                     │
+  │ Developer Laptop    │              │                     │
   │                     │              │  ┌────────────────┐ │
-  │   infra/base/       │              │  │  GA Workflow:   │ │
-  │    *.yaml.template  │              │  │                 │ │
-  │                     │              │  │  1. Render      │ │
-  │   config/dev.env    │              │  │     (envsubst)  │ │
-  │                     │              │  │  2. Validate    │ │
-  │   Claims = 8 fields │              │  │     (OPA)       │ │
-  │                     │              │  │  3. Publish     │ │
-  └─────────────────────┘              │  │     (cub CLI)   │ │
+  │     infra/base/     │              │  │ GA Workflow:    │ │
+  │ *.yaml.template     │              │  │                 │ │
+  │                     │              │  │ 1. Render       │ │
+  │ config/dev.env      │              │  │ (envsubst)      │ │
+  │                     │              │  │ 2. Validate     │ │
+  │ Claims = 8 fields   │              │  │     (OPA)       │ │
+  │                     │              │  │ 3. Publish      │ │
+  └─────────────────────┘              │  │ (cub CLI)       │ │
                                        │  └───────┬────────┘ │
                                        └──────────┼──────────┘
                                                   │
@@ -29,15 +29,15 @@
                                        ┌─────────────────────┐
                                        │      ConfigHub       │
                                        │                      │
-                                       │  Space:              │
-                                       │    messagewall-dev   │
+                                       │       Space:         │
+                                       │ messagewall-dev      │
                                        │                      │
-                                       │  Unit:               │
-                                       │    messagewall-dev   │
-                                       │    Rev 1 → 2 → 3    │
+                                       │        Unit:         │
+                                       │ messagewall-dev      │
+                                       │ Rev 1 → 2 → 3       │
                                        │                      │
-                                       │  (Authoritative      │
-                                       │   source of truth)   │
+                                       │ (Authoritative       │
+                                       │ source of truth)     │
                                        └──────────┬──────────┘
                                                   │
                                        CMP plugin fetches
@@ -51,13 +51,13 @@
   │  ┌──────────────────┐   ┌──────────────────┐  │                               │
   │  │     Kyverno       │   │     ArgoCD       │◄─┘                               │
   │  │                   │   │                  │                                  │
-  │  │  Mutate:          │◄──│  Auto-sync       │                                  │
-  │  │   add required    │   │  Prune           │                                  │
-  │  │   AWS tags        │   │  Self-heal       │                                  │
+  │  │     Mutate:       │◄──│  Auto-sync       │                                  │
+  │  │ add required      │   │  Prune           │                                  │
+  │  │     AWS tags      │   │  Self-heal       │                                  │
   │  │                   │   └────────┬─────────┘                                  │
-  │  │  Validate:        │            │                                            │
-  │  │   reject if tags  │    applies Claim                                        │
-  │  │   missing         │    to cluster                                           │
+  │  │    Validate:      │            │                                            │
+  │  │ reject if tags    │    applies Claim                                        │
+  │  │     missing       │    to cluster                                           │
   │  └──────────────────┘            │                                            │
   │            │                     ▼                                             │
   │            │   ┌──────────────────────────────────┐   ┌─────────────────────┐  │
@@ -76,7 +76,7 @@
                                                                      │
                                                                      ▼
                                        ┌──────────────────────────────────────────┐
-                                       │            AWS  (us-east-1)              │
+                                       │             AWS  (us-east-1)             │
                                        │                                          │
                                        │  ┌──────────┐       ┌────────────────┐  │
                                        │  │    S3     │       │   DynamoDB     │  │
@@ -88,34 +88,34 @@
                                        │        │         │    EventBridge     │  │
                                        │        │         └───────────┬────────┘  │
                                        │  ┌─────┴──────────┐  ┌──────┴─────────┐ │
-                                       │  │  Lambda:        │  │  Lambda:       │ │
-                                       │  │  api-handler    │  │  snapshot-     │ │
-                                       │  │  (POST)         │  │  writer        │ │
+                                       │  │    Lambda:      │  │  Lambda:       │ │
+                                       │  │ api-handler     │  │  snapshot-     │ │
+                                       │  │     (POST)      │  │  writer        │ │
                                        │  └────────────────┘  └────────────────┘ │
                                        │                                          │
                                        └──────────────────────────────────────────┘
-
-
+  
+  
   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-
-
+  
+  
   RUNTIME DATA FLOW (after provisioning)
   ═══════════════════════════════════════
-
+  
   Browser ──POST──► Lambda (api-handler) ──► DynamoDB ──► EventBridge
                                                                  │
   Browser ◄──GET─── S3 (state.json) ◄── Lambda (snapshot-writer) ◄┘
-
-
+  
+  
   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-
-
+  
+  
   BREAK-GLASS ESCAPE HATCH (emergency changes)
   ═════════════════════════════════════════════
-
+  
                                        ┌─────────────────────┐
                                        │      ConfigHub       │
-                                       │  (source of truth)   │
+                                       │ (source of truth)    │
                                        └──────────▲──────────┘
                                                   │
                                        capture-drift-to-
@@ -123,10 +123,10 @@
                                                   │
   ┌─────────────────────┐              ┌──────────┴───────────┐
   │                     │   kubectl    │                      │         ┌──────────┐
-  │   SRE / Operator    │ ────────────►│   Actuator Cluster   │────────►│   AWS    │
+  │ SRE / Operator      │ ────────────►│ Actuator Cluster     │────────►│ AWS      │
   │                     │   apply      │                      │         └──────────┘
-  │   (emergency only)  │              │   Kyverno still      │
-  │                     │              │   enforces policies   │
+  │ (emergency only)    │              │    Kyverno still     │
+  │                     │              │ enforces policies     │
   └─────────────────────┘              └──────────────────────┘
                                                   │
                                        ConfigHub → Git sync

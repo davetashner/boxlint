@@ -517,6 +517,13 @@ mod tests {
         assert_eq!(fix(input), input);
     }
 
+    #[test]
+    fn fix_with_trailing_newline() {
+        let input = "┌───┐\n│ A │ ┌───┐\n│   │ │ B │\n└───┘ └───┘\n";
+        let expected = "┌───┐ ┌───┐\n│ A │ │   │\n│   │ │ B │\n└───┘ └───┘\n";
+        assert_eq!(fix(input), expected);
+    }
+
     // == Fixes misalignment ===================================================
 
     #[test]
