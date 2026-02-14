@@ -658,6 +658,23 @@ mod tests {
         assert!(!should_use_double(&grid, 0, 0));
     }
 
+    // 33b. should_use_double for non-box char at row 0, col 0 (exercises c==0 boundary)
+    #[test]
+    fn should_use_double_nonbox_at_origin() {
+        // 'x' at (0,0): r==0 and c==0 so up/left neighbors are None
+        // right neighbor is ═ (double), down neighbor is ║ (double) → double wins
+        let grid = vec![vec!['x', '═'], vec!['║', ' ']];
+        assert!(should_use_double(&grid, 0, 0));
+    }
+
+    // 33c. should_use_double for non-box char at r>0 (exercises r>0 up-neighbor branch)
+    #[test]
+    fn should_use_double_nonbox_interior() {
+        // 'x' at (1,0): r>0 so up neighbor (═) is checked; right neighbor is ═ → double wins
+        let grid = vec![vec!['═', ' '], vec!['x', '═']];
+        assert!(should_use_double(&grid, 1, 0));
+    }
+
     // 34. grid_get out of bounds
     #[test]
     fn grid_get_bounds() {
