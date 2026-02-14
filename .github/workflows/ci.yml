@@ -26,7 +26,7 @@ jobs:
       - name: Build
         run: |
           if [ "${{ matrix.rust-version }}" = "1.75" ]; then
-            cargo build --all-targets --no-default-features
+            cargo build --no-default-features
           else
             cargo build --all-targets
           fi
