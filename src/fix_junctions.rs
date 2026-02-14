@@ -48,17 +48,66 @@ struct Connections {
 /// Return the directional connections for a single-line box-drawing char.
 fn single_connections(ch: char) -> Option<Connections> {
     Some(match ch {
-        '─' => Connections { left: true, right: true, ..Default::default() },
-        '│' => Connections { up: true, down: true, ..Default::default() },
-        '┌' => Connections { down: true, right: true, ..Default::default() },
-        '┐' => Connections { down: true, left: true, ..Default::default() },
-        '└' => Connections { up: true, right: true, ..Default::default() },
-        '┘' => Connections { up: true, left: true, ..Default::default() },
-        '┬' => Connections { down: true, left: true, right: true, ..Default::default() },
-        '┴' => Connections { up: true, left: true, right: true, ..Default::default() },
-        '├' => Connections { up: true, down: true, right: true, ..Default::default() },
-        '┤' => Connections { up: true, down: true, left: true, ..Default::default() },
-        '┼' => Connections { up: true, down: true, left: true, right: true },
+        '─' => Connections {
+            left: true,
+            right: true,
+            ..Default::default()
+        },
+        '│' => Connections {
+            up: true,
+            down: true,
+            ..Default::default()
+        },
+        '┌' => Connections {
+            down: true,
+            right: true,
+            ..Default::default()
+        },
+        '┐' => Connections {
+            down: true,
+            left: true,
+            ..Default::default()
+        },
+        '└' => Connections {
+            up: true,
+            right: true,
+            ..Default::default()
+        },
+        '┘' => Connections {
+            up: true,
+            left: true,
+            ..Default::default()
+        },
+        '┬' => Connections {
+            down: true,
+            left: true,
+            right: true,
+            ..Default::default()
+        },
+        '┴' => Connections {
+            up: true,
+            left: true,
+            right: true,
+            ..Default::default()
+        },
+        '├' => Connections {
+            up: true,
+            down: true,
+            right: true,
+            ..Default::default()
+        },
+        '┤' => Connections {
+            up: true,
+            down: true,
+            left: true,
+            ..Default::default()
+        },
+        '┼' => Connections {
+            up: true,
+            down: true,
+            left: true,
+            right: true,
+        },
         _ => return None,
     })
 }
@@ -66,17 +115,66 @@ fn single_connections(ch: char) -> Option<Connections> {
 /// Return the directional connections for a double-line box-drawing char.
 fn double_connections(ch: char) -> Option<Connections> {
     Some(match ch {
-        '═' => Connections { left: true, right: true, ..Default::default() },
-        '║' => Connections { up: true, down: true, ..Default::default() },
-        '╔' => Connections { down: true, right: true, ..Default::default() },
-        '╗' => Connections { down: true, left: true, ..Default::default() },
-        '╚' => Connections { up: true, right: true, ..Default::default() },
-        '╝' => Connections { up: true, left: true, ..Default::default() },
-        '╦' => Connections { down: true, left: true, right: true, ..Default::default() },
-        '╩' => Connections { up: true, left: true, right: true, ..Default::default() },
-        '╠' => Connections { up: true, down: true, right: true, ..Default::default() },
-        '╣' => Connections { up: true, down: true, left: true, ..Default::default() },
-        '╬' => Connections { up: true, down: true, left: true, right: true },
+        '═' => Connections {
+            left: true,
+            right: true,
+            ..Default::default()
+        },
+        '║' => Connections {
+            up: true,
+            down: true,
+            ..Default::default()
+        },
+        '╔' => Connections {
+            down: true,
+            right: true,
+            ..Default::default()
+        },
+        '╗' => Connections {
+            down: true,
+            left: true,
+            ..Default::default()
+        },
+        '╚' => Connections {
+            up: true,
+            right: true,
+            ..Default::default()
+        },
+        '╝' => Connections {
+            up: true,
+            left: true,
+            ..Default::default()
+        },
+        '╦' => Connections {
+            down: true,
+            left: true,
+            right: true,
+            ..Default::default()
+        },
+        '╩' => Connections {
+            up: true,
+            left: true,
+            right: true,
+            ..Default::default()
+        },
+        '╠' => Connections {
+            up: true,
+            down: true,
+            right: true,
+            ..Default::default()
+        },
+        '╣' => Connections {
+            up: true,
+            down: true,
+            left: true,
+            ..Default::default()
+        },
+        '╬' => Connections {
+            up: true,
+            down: true,
+            left: true,
+            right: true,
+        },
         _ => return None,
     })
 }
@@ -210,14 +308,28 @@ fn should_use_double(grid: &[Vec<char>], r: usize, c: usize) -> bool {
 
     // For non-box chars being upgraded, check neighbor majority
     let neighbors = [
-        if r > 0 { grid_get(grid, r - 1, c) } else { None },
+        if r > 0 {
+            grid_get(grid, r - 1, c)
+        } else {
+            None
+        },
         grid_get(grid, r + 1, c),
-        if c > 0 { grid_get(grid, r, c - 1) } else { None },
+        if c > 0 {
+            grid_get(grid, r, c - 1)
+        } else {
+            None
+        },
         grid_get(grid, r, c + 1),
     ];
 
-    let double_count = neighbors.iter().filter(|n| n.is_some_and(is_double_box_char)).count();
-    let single_count = neighbors.iter().filter(|n| n.is_some_and(is_single_box_char)).count();
+    let double_count = neighbors
+        .iter()
+        .filter(|n| n.is_some_and(is_double_box_char))
+        .count();
+    let single_count = neighbors
+        .iter()
+        .filter(|n| n.is_some_and(is_single_box_char))
+        .count();
 
     double_count > single_count
 }
@@ -454,7 +566,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(result, input, "junction fixer should not modify correct demo diagram");
+        assert_eq!(
+            result, input,
+            "junction fixer should not modify correct demo diagram"
+        );
     }
 
     // 23. ┘ with ─ below → should NOT add down (only adds expected connections)
@@ -484,10 +599,7 @@ mod tests {
     #[test]
     fn style_detection_single_char() {
         // ─ is a single-line char → returns false immediately
-        assert!(!should_use_double(
-            &vec![vec!['═', '─', '═']],
-            0, 1
-        ));
+        assert!(!should_use_double(&[vec!['═', '─', '═']], 0, 1));
     }
 
     // 26b. should_use_double with non-box char uses neighbor majority
@@ -559,9 +671,17 @@ mod tests {
     #[test]
     fn single_char_for_partial() {
         // Only up → no valid single-line char
-        assert!(single_char_for(Connections { up: true, ..Default::default() }).is_none());
+        assert!(single_char_for(Connections {
+            up: true,
+            ..Default::default()
+        })
+        .is_none());
         // Only down → no valid char
-        assert!(single_char_for(Connections { down: true, ..Default::default() }).is_none());
+        assert!(single_char_for(Connections {
+            down: true,
+            ..Default::default()
+        })
+        .is_none());
     }
 
     // 36. Exercise all single_connections branches
@@ -582,7 +702,11 @@ mod tests {
         ];
         for (ch, (u, d, l, r)) in cases {
             let c = single_connections(ch).unwrap();
-            assert_eq!((c.up, c.down, c.left, c.right), (u, d, l, r), "single_connections('{ch}')");
+            assert_eq!(
+                (c.up, c.down, c.left, c.right),
+                (u, d, l, r),
+                "single_connections('{ch}')"
+            );
         }
         assert!(single_connections('x').is_none());
     }
@@ -605,7 +729,11 @@ mod tests {
         ];
         for (ch, (u, d, l, r)) in cases {
             let c = double_connections(ch).unwrap();
-            assert_eq!((c.up, c.down, c.left, c.right), (u, d, l, r), "double_connections('{ch}')");
+            assert_eq!(
+                (c.up, c.down, c.left, c.right),
+                (u, d, l, r),
+                "double_connections('{ch}')"
+            );
         }
         assert!(double_connections('x').is_none());
     }
@@ -627,8 +755,17 @@ mod tests {
             ((true, true, true, true), '┼'),
         ];
         for ((u, d, l, r), expected) in cases {
-            let c = Connections { up: u, down: d, left: l, right: r };
-            assert_eq!(single_char_for(c), Some(expected), "single_char_for({u},{d},{l},{r})");
+            let c = Connections {
+                up: u,
+                down: d,
+                left: l,
+                right: r,
+            };
+            assert_eq!(
+                single_char_for(c),
+                Some(expected),
+                "single_char_for({u},{d},{l},{r})"
+            );
         }
     }
 
@@ -649,8 +786,17 @@ mod tests {
             ((true, true, true, true), '╬'),
         ];
         for ((u, d, l, r), expected) in cases {
-            let c = Connections { up: u, down: d, left: l, right: r };
-            assert_eq!(double_char_for(c), Some(expected), "double_char_for({u},{d},{l},{r})");
+            let c = Connections {
+                up: u,
+                down: d,
+                left: l,
+                right: r,
+            };
+            assert_eq!(
+                double_char_for(c),
+                Some(expected),
+                "double_char_for({u},{d},{l},{r})"
+            );
         }
     }
 

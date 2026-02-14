@@ -203,11 +203,7 @@ fn widen_box_right(
 // Edge padding: extend short content lines to box width
 // ---------------------------------------------------------------------------
 
-fn pad_short_content_lines(
-    grid: &mut [Vec<char>],
-    bounds: &BoundingRect,
-    style: BoxStyle,
-) {
+fn pad_short_content_lines(grid: &mut [Vec<char>], bounds: &BoundingRect, style: BoxStyle) {
     let r1 = bounds.top_left.row;
     let r2 = bounds.bottom_right.row;
     let c1 = bounds.top_left.col;
@@ -902,7 +898,10 @@ mod tests {
         pad_short_content_lines(&mut grid, &bounds, BoxStyle::Single);
         // Line 1 doesn't start with │, so should not get right edge added
         let line1: String = grid[1].iter().collect();
-        assert!(!line1.ends_with('│'), "line without left edge should not get right edge: {line1}");
+        assert!(
+            !line1.ends_with('│'),
+            "line without left edge should not get right edge: {line1}"
+        );
     }
 
     #[test]
@@ -926,7 +925,10 @@ mod tests {
 │ ok       │
 └──────────┘";
         let fixed = fix(input);
-        assert!(fixed.contains("│ content  │"), "padded line should have correct width: {fixed}");
+        assert!(
+            fixed.contains("│ content  │"),
+            "padded line should have correct width: {fixed}"
+        );
         // "ok" gets left-repadded since content is left-aligned
         assert!(fixed.contains("ok"), "existing content preserved: {fixed}");
     }

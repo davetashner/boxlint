@@ -224,18 +224,10 @@ fn is_connected_corner(grid: &crate::grid::Grid, r: usize, c: usize, ch: char) -
     let is_v = |ch: char| is_vertical_connector(ch) || is_arrow_tip(ch);
 
     match ch {
-        '└' | '╚' => {
-            above.is_some_and(is_v) || right.is_some_and(is_h)
-        }
-        '┘' | '╝' => {
-            above.is_some_and(is_v) || left.is_some_and(is_h)
-        }
-        '┐' | '╗' => {
-            below.is_some_and(is_v) || left.is_some_and(is_h)
-        }
-        '┌' | '╔' => {
-            below.is_some_and(is_v) || right.is_some_and(is_h)
-        }
+        '└' | '╚' => above.is_some_and(is_v) || right.is_some_and(is_h),
+        '┘' | '╝' => above.is_some_and(is_v) || left.is_some_and(is_h),
+        '┐' | '╗' => below.is_some_and(is_v) || left.is_some_and(is_h),
+        '┌' | '╔' => below.is_some_and(is_v) || right.is_some_and(is_h),
         _ => false,
     }
 }
@@ -480,7 +472,10 @@ fn find_corner_on_row(
     target: char,
 ) -> Option<usize> {
     let cols = grid.cols();
-    (start_col..cols).find(|&c| grid.get(row, c).is_some_and(|ch| matches_corner_scan(ch, target)))
+    (start_col..cols).find(|&c| {
+        grid.get(row, c)
+            .is_some_and(|ch| matches_corner_scan(ch, target))
+    })
 }
 
 /// Find a corner character (or valid junction substitute) on the same column,
@@ -492,7 +487,10 @@ fn find_corner_on_col(
     target: char,
 ) -> Option<usize> {
     let rows = grid.rows();
-    (start_row..rows).find(|&r| grid.get(r, col).is_some_and(|ch| matches_corner_scan(ch, target)))
+    (start_row..rows).find(|&r| {
+        grid.get(r, col)
+            .is_some_and(|ch| matches_corner_scan(ch, target))
+    })
 }
 
 /// Try to trace a double-line box from top-left '╔' at (r,c).
@@ -811,9 +809,9 @@ impl LintRule for BoxCornerEdgeLint {
                 // Check if this position is inside an already-validated box.
                 // Nested inner boxes with minor alignment issues should not
                 // generate errors since the outer box structure is valid.
-                let inside_valid_box = valid_bounds.iter().any(|(tl, br)| {
-                    r > tl.row && r < br.row && c > tl.col && c < br.col
-                });
+                let inside_valid_box = valid_bounds
+                    .iter()
+                    .any(|(tl, br)| r > tl.row && r < br.row && c > tl.col && c < br.col);
 
                 // Orphan corner — diagnose based on type
                 match ch {
@@ -1176,7 +1174,10 @@ X  │
         let input = "┌──┐\n└──┘";
         let diags = lint(input);
         // Degenerate box: corners are connected to edges so no orphan reports
-        assert!(diags.is_empty(), "degenerate box corners are connected: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "degenerate box corners are connected: {diags:?}"
+        );
     }
 
     // 22. Double box — broken top edge
@@ -1266,7 +1267,10 @@ X  ║
         let input = "╔══╗\n╚══╝";
         let diags = lint(input);
         // Degenerate box: corners are connected to edges so no orphan reports
-        assert!(diags.is_empty(), "degenerate double box corners are connected: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "degenerate double box corners are connected: {diags:?}"
+        );
     }
 
     // 31. Mixed style on valid box — test check_style_consistency directly
@@ -1906,7 +1910,8 @@ X  ║
         for d in &diags {
             assert!(
                 !d.message.contains("orphan"),
-                "unexpected orphan: {}", d.message
+                "unexpected orphan: {}",
+                d.message
             );
         }
     }
@@ -1922,7 +1927,8 @@ X  ║
         for d in &diags {
             assert!(
                 !d.message.contains("orphan"),
-                "unexpected orphan: {}", d.message
+                "unexpected orphan: {}",
+                d.message
             );
         }
     }
@@ -1939,7 +1945,9 @@ X  ║
         let diags = lint(input);
         // ┼ is valid as BR corner
         assert!(
-            !diags.iter().any(|d| d.message.contains("missing") && d.message.contains("bottom-right")),
+            !diags
+                .iter()
+                .any(|d| d.message.contains("missing") && d.message.contains("bottom-right")),
             "┼ should be valid as BR corner: {diags:?}"
         );
     }
@@ -1949,10 +1957,7 @@ X  ║
     fn demo_diagram_zero_errors() {
         let input = include_str!("../examples/demo-flow-diagram.txt");
         let diags = lint(input);
-        let errors: Vec<_> = diags
-            .iter()
-            .filter(|d| d.level == Level::Error)
-            .collect();
+        let errors: Vec<_> = diags.iter().filter(|d| d.level == Level::Error).collect();
         assert!(
             errors.is_empty(),
             "expected 0 errors on demo diagram, got {}:\n{}",
@@ -2014,10 +2019,7 @@ X  ║
 │  └────┘        │
 └────────────────┘";
         let diags = lint(input);
-        let errors: Vec<_> = diags
-            .iter()
-            .filter(|d| d.level == Level::Error)
-            .collect();
+        let errors: Vec<_> = diags.iter().filter(|d| d.level == Level::Error).collect();
         assert!(
             errors.is_empty(),
             "nested box alignment issues should be suppressed: {errors:?}"
