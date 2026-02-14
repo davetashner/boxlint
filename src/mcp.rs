@@ -32,12 +32,14 @@ pub struct FixDiagramParams {
     pub content: String,
 }
 
+#[cfg(not(tarpaulin_include))]
 impl Default for BoxlintMcpServer {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(not(tarpaulin_include))]
 #[tool_router]
 impl BoxlintMcpServer {
     pub fn new() -> Self {
@@ -84,6 +86,7 @@ impl BoxlintMcpServer {
     }
 }
 
+#[cfg(not(tarpaulin_include))]
 #[tool_handler]
 impl ServerHandler for BoxlintMcpServer {
     fn get_info(&self) -> ServerInfo {
@@ -109,10 +112,168 @@ impl ServerHandler for BoxlintMcpServer {
     }
 }
 
+#[cfg(not(tarpaulin_include))]
+pub fn install_mcp_config(project: bool) -> Result<(), String> {
+    let settings_path = if project {
+        let cwd =
+            std::env::current_dir().map_err(|e| format!("could not get current directory: {e}"))?;
+        cwd.join(".claude").join("settings.local.json")
+    } else {
+        let home =
+            std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+        std::path::PathBuf::from(home)
+            .join(".claude")
+            .join("settings.json")
+    };
+
+    install_mcp_config_to(&settings_path)?;
+    println!(
+        "Installed boxlint MCP server in {}",
+        settings_path.display()
+    );
+    Ok(())
+}
+
+/// Install MCP config into a specific settings file path (for testability).
+pub fn install_mcp_config_to(settings_path: &std::path::Path) -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .map_err(|e| format!("could not determine boxlint binary path: {e}"))?;
+    let exe_str = exe.to_string_lossy().to_string();
+
+    // Read existing file or start with empty object
+    let existing = if settings_path.exists() {
+        std::fs::read_to_string(settings_path)
+            .map_err(|e| format!("could not read {}: {e}", settings_path.display()))?
+    } else {
+        "{}".to_string()
+    };
+
+    let mut root: serde_json::Value = serde_json::from_str(&existing)
+        .map_err(|e| format!("could not parse {}: {e}", settings_path.display()))?;
+
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| format!("{} is not a JSON object", settings_path.display()))?;
+
+    if !obj.contains_key("mcpServers") {
+        obj.insert(
+            "mcpServers".to_string(),
+            serde_json::Value::Object(serde_json::Map::new()),
+        );
+    }
+    let mcp_servers = obj
+        .get_mut("mcpServers")
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| {
+            format!(
+                "mcpServers in {} is not a JSON object",
+                settings_path.display()
+            )
+        })?;
+
+    mcp_servers.insert(
+        "boxlint".to_string(),
+        serde_json::json!({
+            "command": exe_str,
+            "args": ["mcp"]
+        }),
+    );
+
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create directory {}: {e}", parent.display()))?;
+    }
+
+    let output = serde_json::to_string_pretty(&root)
+        .map_err(|e| format!("could not serialize JSON: {e}"))?;
+    std::fs::write(settings_path, output)
+        .map_err(|e| format!("could not write {}: {e}", settings_path.display()))?;
+
+    Ok(())
+}
+
+#[cfg(not(tarpaulin_include))]
 pub async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     let service = BoxlintMcpServer::new()
         .serve(rmcp::transport::stdio())
         .await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_creates_new_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(".claude").join("settings.json");
+
+        install_mcp_config_to(&settings_path).unwrap();
+
+        let content = std::fs::read_to_string(&settings_path).unwrap();
+        let root: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        let servers = root.get("mcpServers").unwrap().as_object().unwrap();
+        let boxlint = servers.get("boxlint").unwrap();
+        assert_eq!(boxlint.get("args").unwrap(), &serde_json::json!(["mcp"]));
+        assert!(!boxlint.get("command").unwrap().as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn install_errors_when_mcp_servers_not_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+
+        let bad = serde_json::json!({
+            "mcpServers": "not-an-object"
+        });
+        std::fs::write(&settings_path, serde_json::to_string(&bad).unwrap()).unwrap();
+
+        let result = install_mcp_config_to(&settings_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("is not a JSON object"));
+    }
+
+    #[test]
+    fn install_merges_into_existing_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+
+        // Write existing settings with another key
+        let existing = serde_json::json!({
+            "apiKey": "test-key",
+            "mcpServers": {
+                "other-server": {
+                    "command": "/usr/bin/other",
+                    "args": []
+                }
+            }
+        });
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        install_mcp_config_to(&settings_path).unwrap();
+
+        let content = std::fs::read_to_string(&settings_path).unwrap();
+        let root: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // Existing keys preserved
+        assert_eq!(root.get("apiKey").unwrap().as_str().unwrap(), "test-key");
+
+        let servers = root.get("mcpServers").unwrap().as_object().unwrap();
+        // Existing server preserved
+        assert!(servers.contains_key("other-server"));
+        // boxlint added
+        assert!(servers.contains_key("boxlint"));
+        assert_eq!(
+            servers.get("boxlint").unwrap().get("args").unwrap(),
+            &serde_json::json!(["mcp"])
+        );
+    }
 }

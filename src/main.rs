@@ -165,9 +165,23 @@ pub enum Command {
         #[arg(long = "ext", value_delimiter = ',')]
         extra_extensions: Vec<String>,
     },
-    /// Start MCP (Model Context Protocol) server over stdio
+    /// MCP (Model Context Protocol) server and configuration
     #[cfg(feature = "mcp")]
-    Mcp,
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
+}
+
+#[cfg(feature = "mcp")]
+#[derive(Subcommand, Debug)]
+pub enum McpAction {
+    /// Install boxlint as an MCP server in Claude Code settings
+    Install {
+        /// Use project-level settings (.claude/settings.local.json) instead of global
+        #[arg(long)]
+        project: bool,
+    },
 }
 
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
@@ -1113,15 +1127,24 @@ fn main() {
             }
         }
         #[cfg(feature = "mcp")]
-        Command::Mcp => {
-            let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-            if let Err(e) = rt.block_on(mcp::run_mcp_server()) {
-                eprintln!("boxlint: MCP server error: {e}");
-                2
-            } else {
-                0
+        Command::Mcp { action } => match action {
+            Some(McpAction::Install { project }) => match mcp::install_mcp_config(*project) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("boxlint: {e}");
+                    1
+                }
+            },
+            None => {
+                let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+                if let Err(e) = rt.block_on(mcp::run_mcp_server()) {
+                    eprintln!("boxlint: MCP server error: {e}");
+                    2
+                } else {
+                    0
+                }
             }
-        }
+        },
     };
 
     process::exit(code);
@@ -4008,6 +4031,48 @@ mod tests {
                 assert_eq!(extra_extensions, vec!["puml"]);
             }
             _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "mcp")]
+    fn parse_mcp_no_subcommand() {
+        let cli = Cli::try_parse_from(["boxlint", "mcp"]).unwrap();
+        match cli.command {
+            Command::Mcp { action } => {
+                assert!(action.is_none());
+            }
+            _ => panic!("expected Mcp command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "mcp")]
+    fn parse_mcp_install() {
+        let cli = Cli::try_parse_from(["boxlint", "mcp", "install"]).unwrap();
+        match cli.command {
+            Command::Mcp { action } => match action {
+                Some(McpAction::Install { project }) => {
+                    assert!(!project);
+                }
+                _ => panic!("expected Install action"),
+            },
+            _ => panic!("expected Mcp command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "mcp")]
+    fn parse_mcp_install_project() {
+        let cli = Cli::try_parse_from(["boxlint", "mcp", "install", "--project"]).unwrap();
+        match cli.command {
+            Command::Mcp { action } => match action {
+                Some(McpAction::Install { project }) => {
+                    assert!(project);
+                }
+                _ => panic!("expected Install action"),
+            },
+            _ => panic!("expected Mcp command"),
         }
     }
 }

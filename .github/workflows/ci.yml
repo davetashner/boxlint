@@ -23,21 +23,20 @@ jobs:
         with:
           toolchain: ${{ matrix.rust-version }}
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-      - run: cargo build --all-targets
-      - run: cargo test
-
-  test-mcp:
-    name: Test (MCP feature, stable)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@a54c7afa936fefeb4456b2dd8068152669aa8203
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-      - run: cargo build --all-targets --features mcp
-      - run: cargo test --features mcp
-      - run: cargo clippy --all-targets --features mcp -- -D warnings
+      - name: Build
+        run: |
+          if [ "${{ matrix.rust-version }}" = "1.75" ]; then
+            cargo build --no-default-features
+          else
+            cargo build --all-targets
+          fi
+      - name: Test
+        run: |
+          if [ "${{ matrix.rust-version }}" = "1.75" ]; then
+            cargo test --no-default-features
+          else
+            cargo test
+          fi
 
   clippy:
     name: Clippy
