@@ -4,11 +4,24 @@ version = "0.1.0"
 edition = "2021"
 description = "A linter and auto-fixer for Unicode box-drawing diagrams"
 license = "MIT"
+repository = "https://github.com/davetashner/boxlint"
+homepage = "https://github.com/davetashner/boxlint"
+readme = "README.md"
+keywords = ["lint", "unicode", "box-drawing", "diagram", "fixer"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["src/**/*", "Cargo.toml", "LICENSE", "README.md"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)', 'cfg(feature, values("mcp"))'] }
+
+[features]
+default = []
+mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rmcp = { version = "0.15", features = ["server", "transport-io"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+schemars = { version = "1.0", optional = true }
