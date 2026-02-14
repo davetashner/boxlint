@@ -94,6 +94,68 @@ fn edge_name(tl: char, which: &str) -> char {
 }
 
 // ---------------------------------------------------------------------------
+// Flow-diagram connectivity check
+// ---------------------------------------------------------------------------
+
+/// Characters that act as vertical connectors (edges, junctions, corners).
+fn is_vertical_connector(ch: char) -> bool {
+    matches!(
+        ch,
+        '│' | '├' | '┤' | '┼' | '┌' | '┐' | '╔' | '╗' | '║' | '╠' | '╣' | '╬' | '┬' | '┴'
+    )
+}
+
+/// Characters that act as horizontal connectors (edges, junctions, corners).
+fn is_horizontal_connector(ch: char) -> bool {
+    matches!(
+        ch,
+        '─' | '┴' | '┬' | '┼' | '└' | '┘' | '╚' | '╝' | '═' | '╩' | '╦' | '╬' | '├' | '┤'
+    )
+}
+
+/// Check whether a non-top-left corner is connected to appropriate edges
+/// on both of its expected sides, indicating it is part of a flow diagram
+/// (merge line, split line, etc.) rather than a truly orphan corner.
+fn is_connected_corner(grid: &crate::grid::Grid, r: usize, c: usize, ch: char) -> bool {
+    let above = if r > 0 { grid.get(r - 1, c) } else { None };
+    let below = if r + 1 < grid.rows() {
+        grid.get(r + 1, c)
+    } else {
+        None
+    };
+    let left = if c > 0 { grid.get(r, c - 1) } else { None };
+    let right = if c + 1 < grid.cols() {
+        grid.get(r, c + 1)
+    } else {
+        None
+    };
+
+    match ch {
+        '└' | '╚' => {
+            // Needs vertical above AND horizontal to right
+            above.is_some_and(is_vertical_connector)
+                && right.is_some_and(is_horizontal_connector)
+        }
+        '┘' | '╝' => {
+            // Needs vertical above AND horizontal to left
+            above.is_some_and(is_vertical_connector)
+                && left.is_some_and(is_horizontal_connector)
+        }
+        '┐' | '╗' => {
+            // Needs vertical below AND horizontal to left
+            below.is_some_and(is_vertical_connector)
+                && left.is_some_and(is_horizontal_connector)
+        }
+        '┌' | '╔' => {
+            // Non-box ┌: needs vertical below AND horizontal to right
+            below.is_some_and(is_vertical_connector)
+                && right.is_some_and(is_horizontal_connector)
+        }
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Diagnostic helpers
 // ---------------------------------------------------------------------------
 
@@ -650,13 +712,17 @@ impl LintRule for BoxCornerEdgeLint {
                         let result = diagnose_single_box(&ir.grid, r, c);
                         accounted_corners.extend(&result.found_corners);
                         if result.diagnostics.is_empty() {
-                            let (l, co) = pos(r, c);
-                            diagnostics.push(diag(
-                                l,
-                                co,
-                                Level::Error,
-                                format!("orphan corner '{}' is not part of any box", ch),
-                            ));
+                            // Degenerate (too small for a box) — check if it's
+                            // a connected flow-diagram element before reporting
+                            if !is_connected_corner(&ir.grid, r, c, ch) {
+                                let (l, co) = pos(r, c);
+                                diagnostics.push(diag(
+                                    l,
+                                    co,
+                                    Level::Error,
+                                    format!("orphan corner '{}' is not part of any box", ch),
+                                ));
+                            }
                         } else {
                             diagnostics.extend(result.diagnostics);
                         }
@@ -665,6 +731,23 @@ impl LintRule for BoxCornerEdgeLint {
                         let result = diagnose_double_box(&ir.grid, r, c);
                         accounted_corners.extend(&result.found_corners);
                         if result.diagnostics.is_empty() {
+                            if !is_connected_corner(&ir.grid, r, c, ch) {
+                                let (l, co) = pos(r, c);
+                                diagnostics.push(diag(
+                                    l,
+                                    co,
+                                    Level::Error,
+                                    format!("orphan corner '{}' is not part of any box", ch),
+                                ));
+                            }
+                        } else {
+                            diagnostics.extend(result.diagnostics);
+                        }
+                    }
+                    _ => {
+                        // Non-top-left corners: ┐ └ ┘ ╗ ╚ ╝
+                        // Check if connected to flow-diagram elements before reporting orphan
+                        if !is_connected_corner(&ir.grid, r, c, ch) {
                             let (l, co) = pos(r, c);
                             diagnostics.push(diag(
                                 l,
@@ -672,19 +755,7 @@ impl LintRule for BoxCornerEdgeLint {
                                 Level::Error,
                                 format!("orphan corner '{}' is not part of any box", ch),
                             ));
-                        } else {
-                            diagnostics.extend(result.diagnostics);
                         }
-                    }
-                    _ => {
-                        // Non-top-left corners: ┐ └ ┘ ╗ ╚ ╝
-                        let (l, co) = pos(r, c);
-                        diagnostics.push(diag(
-                            l,
-                            co,
-                            Level::Error,
-                            format!("orphan corner '{}' is not part of any box", ch),
-                        ));
                     }
                 }
             }
@@ -1484,5 +1555,192 @@ X  ║
         // The valid box corners should not be flagged
         // The arrow tip '►' is not a box corner, so no diagnostics from it
         assert!(diags.is_empty(), "got: {diags:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Flow-diagram connectivity tests (boxlint-4nk)
+    // -----------------------------------------------------------------------
+
+    // 61. Merge line: └───┴───┘ with │ above each corner → no false positives
+    #[test]
+    fn merge_line_no_false_positives() {
+        let input = "\
+│       │
+└───┴───┘";
+        let diags = lint(input);
+        assert!(diags.is_empty(), "expected no diagnostics for merge line, got: {diags:?}");
+    }
+
+    // 62. Split line: ┌───┬───┐ with │ below
+    // The ┌ triggers box diagnosis (which reports "runs off grid" since there's
+    // no bottom row), but the ┐ is suppressed via accounted_corners from the
+    // prescan. Non-top-left corners in the _ => branch are properly suppressed.
+    #[test]
+    fn split_line_suppresses_non_tl_corners() {
+        // A merge line (non-top-left corners) should produce zero diagnostics
+        let input = "│       │\n└───┴───┘";
+        let diags = lint(input);
+        assert!(diags.is_empty(), "expected no diagnostics for merge line, got: {diags:?}");
+
+        // A split line with ┌ still reports box-trace errors for ┌
+        // but ┐ is accounted for by the prescan
+        let input2 = "┌───┬───┐\n│       │";
+        let diags2 = lint(input2);
+        // ┌ produces a box-trace diagnostic, ┐ is accounted
+        assert!(
+            diags2.len() <= 1,
+            "expected at most 1 diagnostic for split line, got: {diags2:?}"
+        );
+    }
+
+    // 63. Truly orphan └ with no connections → still reported
+    #[test]
+    fn orphan_corner_still_reported() {
+        let input = "  └  ";
+        let diags = lint(input);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("orphan corner '└'"));
+    }
+
+    // 64. Truly orphan ┐ with no connections → still reported
+    #[test]
+    fn orphan_top_right_still_reported() {
+        let input = "  ┐  ";
+        let diags = lint(input);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("orphan corner '┐'"));
+    }
+
+    // 65. Connected ┘ with vertical above and horizontal left
+    #[test]
+    fn connected_bottom_right_corner() {
+        // ┘ with only vertical above (no horizontal) → still orphan
+        let diags = lint("│\n┘");
+        assert!(!diags.is_empty(), "┘ with only vertical above should be orphan");
+
+        // Properly connected ┘: │ above and ─ to left
+        let diags2 = lint(" │\n─┘");
+        assert!(diags2.is_empty(), "connected ┘ should not be orphan, got: {diags2:?}");
+    }
+
+    // 66. Connected ┐ with vertical below and horizontal left
+    #[test]
+    fn connected_top_right_corner() {
+        let diags = lint("─┐\n │");
+        assert!(diags.is_empty(), "connected ┐ should not be orphan, got: {diags:?}");
+    }
+
+    // 67. is_connected_corner direct tests
+    #[test]
+    fn is_connected_corner_direct() {
+        let grid = crate::grid::Grid::new("│\n└─");
+        assert!(is_connected_corner(&grid, 1, 0, '└'));
+
+        let grid = crate::grid::Grid::new(" │\n─┘");
+        assert!(is_connected_corner(&grid, 1, 1, '┘'));
+
+        let grid = crate::grid::Grid::new("─┐\n │");
+        assert!(is_connected_corner(&grid, 0, 1, '┐'));
+
+        let grid = crate::grid::Grid::new("┌─\n│ ");
+        assert!(is_connected_corner(&grid, 0, 0, '┌'));
+
+        // Not connected
+        let grid = crate::grid::Grid::new(" \n└ ");
+        assert!(!is_connected_corner(&grid, 1, 0, '└'));
+    }
+
+    // 68. is_connected_corner with unknown char
+    #[test]
+    fn is_connected_corner_unknown_char() {
+        let grid = crate::grid::Grid::new("X");
+        assert!(!is_connected_corner(&grid, 0, 0, 'X'));
+    }
+
+    // 69. Vertical/horizontal connector helpers
+    #[test]
+    fn connector_helpers() {
+        assert!(is_vertical_connector('│'));
+        assert!(is_vertical_connector('├'));
+        assert!(is_vertical_connector('┤'));
+        assert!(is_vertical_connector('┼'));
+        assert!(is_vertical_connector('┌'));
+        assert!(is_vertical_connector('┐'));
+        assert!(is_vertical_connector('║'));
+        assert!(is_vertical_connector('┬'));
+        assert!(is_vertical_connector('┴'));
+        assert!(!is_vertical_connector('─'));
+        assert!(!is_vertical_connector(' '));
+
+        assert!(is_horizontal_connector('─'));
+        assert!(is_horizontal_connector('┴'));
+        assert!(is_horizontal_connector('┬'));
+        assert!(is_horizontal_connector('┼'));
+        assert!(is_horizontal_connector('└'));
+        assert!(is_horizontal_connector('┘'));
+        assert!(is_horizontal_connector('═'));
+        assert!(is_horizontal_connector('├'));
+        assert!(is_horizontal_connector('┤'));
+        assert!(!is_horizontal_connector('│'));
+        assert!(!is_horizontal_connector(' '));
+    }
+
+    // 70. Double-line connected corners
+    #[test]
+    fn double_connected_corners() {
+        let grid = crate::grid::Grid::new("║\n╚═");
+        assert!(is_connected_corner(&grid, 1, 0, '╚'));
+
+        let grid = crate::grid::Grid::new(" ║\n═╝");
+        assert!(is_connected_corner(&grid, 1, 1, '╝'));
+
+        let grid = crate::grid::Grid::new("═╗\n ║");
+        assert!(is_connected_corner(&grid, 0, 1, '╗'));
+
+        let grid = crate::grid::Grid::new("╔═\n║ ");
+        assert!(is_connected_corner(&grid, 0, 0, '╔'));
+    }
+
+    // 71. Flow diagram from demo file should have fewer false positives
+    #[test]
+    fn demo_flow_diagram_reduced_false_positives() {
+        let input = include_str!("../examples/demo-flow-diagram.txt");
+        let diags = lint(input);
+        // The demo contains flow-diagram merge/split lines that should NOT
+        // be flagged as orphan corners when properly connected
+        for d in &diags {
+            // No diagnostic should be about a connected corner
+            if d.message.contains("orphan corner") {
+                // Verify it's truly orphan by checking it's not connected
+                let grid = crate::grid::Grid::new(input);
+                let r = d.line - 1;
+                let c = d.col - 1;
+                if let Some(ch) = grid.get(r, c) {
+                    assert!(
+                        !is_connected_corner(&grid, r, c, ch),
+                        "false positive orphan at {}:{}: {}",
+                        d.line,
+                        d.col,
+                        d.message
+                    );
+                }
+            }
+        }
+    }
+
+    // 72. Corner at grid edge (row 0 or col 0) — boundary check
+    #[test]
+    fn corner_at_grid_boundary() {
+        // └ at row 0 — no row above → not connected
+        let grid = crate::grid::Grid::new("└─");
+        assert!(!is_connected_corner(&grid, 0, 0, '└'));
+
+        // ┘ at col 0 — no col to left → not connected
+        let grid = crate::grid::Grid::new(" │\n┘ ");
+        assert!(!is_connected_corner(&grid, 1, 0, '┘'));
+
+        // ┐ at last row — no row below → not connected
+        let grid = crate::grid::Grid::new("─┐");
+        assert!(!is_connected_corner(&grid, 0, 1, '┐'));
     }
 }
