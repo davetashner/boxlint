@@ -1068,8 +1068,11 @@ fn main() {
             if rc != 0 {
                 rc
             } else {
-                let effective_in_place =
-                    if *to_stdout { false } else { *in_place || path.is_some() };
+                let effective_in_place = if *to_stdout {
+                    false
+                } else {
+                    *in_place || path.is_some()
+                };
                 run_fix(
                     path.as_deref(),
                     effective_in_place,
@@ -1256,8 +1259,7 @@ mod tests {
 
     #[test]
     fn parse_lint_stdout_flag() {
-        let cli =
-            Cli::try_parse_from(["boxlint", "lint", "--fix", "--stdout", "foo.txt"]).unwrap();
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--fix", "--stdout", "foo.txt"]).unwrap();
         match cli.command {
             Command::Lint { stdout, fix, .. } => {
                 assert!(stdout);
@@ -2569,7 +2571,15 @@ mod tests {
         fs::write(&file, "hello\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2584,7 +2594,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(ErrorRule));
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2613,7 +2631,15 @@ mod tests {
         fs::write(dir.join("b.txt"), "world").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(dir.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, None, &[]);
+        let code = run_check(
+            Some(dir.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2628,7 +2654,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(ErrorRule));
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2642,7 +2676,15 @@ mod tests {
         fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
 
         let registry = RuleRegistry::new();
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2675,7 +2717,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(WarnOnlyRule));
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
@@ -3274,7 +3324,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, Some(2), &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            Some(2),
+            &[],
+        );
         // Exit code still reflects all errors
         assert_eq!(code, 1);
 
@@ -3290,7 +3348,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(3)));
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, Some(10), &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            Some(10),
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -3305,7 +3371,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, None, &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            None,
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
@@ -3320,7 +3394,15 @@ mod tests {
 
         let mut registry = RuleRegistry::new();
         registry.lint_rules.push(Box::new(MultiErrorRule(5)));
-        let code = run_check(Some(file.to_str().unwrap()), false, &OutputFormat::Text, &registry, None, Some(1), &[]);
+        let code = run_check(
+            Some(file.to_str().unwrap()),
+            false,
+            &OutputFormat::Text,
+            &registry,
+            None,
+            Some(1),
+            &[],
+        );
         assert_eq!(code, 1);
 
         let _ = fs::remove_dir_all(&dir);
