@@ -1,6 +1,7 @@
 pub mod detect_arrows;
 pub mod detect_boxes;
 pub mod extract;
+pub mod fix_box_corners;
 pub mod grid;
 pub mod lint_box_corners;
 
@@ -140,6 +141,9 @@ impl RuleRegistry {
         registry
             .lint_rules
             .push(Box::new(crate::lint_box_corners::BoxCornerEdgeLint));
+        registry
+            .fixers
+            .push(Box::new(crate::fix_box_corners::BoxCornerEdgeFixer));
         registry
     }
 
@@ -789,7 +793,7 @@ mod tests {
     fn registry_default() {
         let reg = RuleRegistry::default();
         assert!(!reg.lint_rules.is_empty());
-        assert!(reg.fixers.is_empty());
+        assert!(!reg.fixers.is_empty());
     }
 
     // Helper rule that produces diagnostics for testing run_lint paths
