@@ -461,4 +461,148 @@ mod tests {
         // Height is only 2 rows (r=0, r2=1) which means r2 <= r+1, so skipped
         assert!(ir.nodes.is_empty(), "degenerate box should be skipped");
     }
+
+    // Coverage: top edge has non-edge char → is_top_edge_char returns false (line 73)
+    #[test]
+    fn single_box_bad_top_edge() {
+        let input = "┌─X┐\n│  │\n└──┘";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(
+            ir.nodes.is_empty(),
+            "box with bad top edge should not be detected"
+        );
+    }
+
+    // Coverage: top edge runs off grid → c2 >= cols (line 78)
+    #[test]
+    fn top_edge_runs_off_grid() {
+        let input = "┌───\n│   \n└───";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty(), "box with no ┐ should not be detected");
+    }
+
+    // Coverage: degenerate width single box → c2 <= c + 1 (line 82)
+    #[test]
+    fn degenerate_width_single_box() {
+        let input = "┌┐\n││\n└┘";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty(), "width-2 box should be rejected");
+    }
+
+    // Coverage: left edge runs off grid → r2 >= rows (line 98)
+    #[test]
+    fn left_edge_runs_off_grid() {
+        let input = "┌──┐\n│  │";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty(), "box with no └ should not be detected");
+    }
+
+    // Coverage: bottom edge has non-edge char (line 114)
+    #[test]
+    fn single_box_bad_bottom_edge() {
+        let input = "┌──┐\n│  │\n└─X┘";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(
+            ir.nodes.is_empty(),
+            "box with bad bottom edge should not be detected"
+        );
+    }
+
+    // Coverage: right edge has non-edge char (line 122 — is_right_edge_char false)
+    #[test]
+    fn single_box_bad_right_edge() {
+        let input = "┌──┐\n│  X\n│  │\n└──┘";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(
+            ir.nodes.is_empty(),
+            "box with bad right edge should not be detected"
+        );
+    }
+
+    // Coverage: double box bad top edge (line 170)
+    #[test]
+    fn double_box_bad_top_edge() {
+        let input = "╔═X╗\n║  ║\n╚══╝";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
+
+    // Coverage: double box top edge runs off grid (line 175)
+    #[test]
+    fn double_box_top_edge_runs_off_grid() {
+        let input = "╔═══\n║   \n╚═══";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
+
+    // Coverage: degenerate width double box (line 178)
+    #[test]
+    fn degenerate_width_double_box() {
+        let input = "╔╗\n║║\n╚╝";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
+
+    // Coverage: double box bad left edge (line 189)
+    #[test]
+    fn double_box_bad_left_edge() {
+        let input = "╔══╗\n║  ║\nX  ║\n╚══╝";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
+
+    // Coverage: double box left edge runs off grid (line 194)
+    #[test]
+    fn double_box_left_edge_runs_off_grid() {
+        let input = "╔══╗\n║  ║";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
+
+    // Coverage: degenerate height double box (line 197)
+    #[test]
+    fn degenerate_height_double_box() {
+        let input = "╔══╗\n╚══╝";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
+
+    // Coverage: missing bottom-right corner double box (line 202)
+    #[test]
+    fn missing_bottom_right_corner_double() {
+        let input = "╔══╗\n║  ║\n╚══X";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
+
+    // Coverage: double box bad bottom edge (line 209)
+    #[test]
+    fn double_box_bad_bottom_edge() {
+        let input = "╔══╗\n║  ║\n╚═X╝";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
+
+    // Coverage: double box bad right edge (line 217)
+    #[test]
+    fn double_box_bad_right_edge() {
+        let input = "╔══╗\n║  X\n║  ║\n╚══╝";
+        let mut ir = DiagramIR::new(input);
+        detect_boxes(&mut ir);
+        assert!(ir.nodes.is_empty());
+    }
 }

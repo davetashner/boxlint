@@ -5,6 +5,9 @@ edition = "2021"
 description = "A linter and auto-fixer for Unicode box-drawing diagrams"
 license = "MIT"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

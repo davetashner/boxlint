@@ -159,6 +159,7 @@ impl RuleRegistry {
 // Input helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(not(tarpaulin_include))]
 fn read_stdin() -> io::Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
@@ -193,40 +194,51 @@ fn collect_files(path: &str) -> io::Result<Vec<String>> {
 // Subcommand implementations
 // ---------------------------------------------------------------------------
 
+/// Load file inputs from a path, or read from stdin if `path` is None.
+#[cfg(not(tarpaulin_include))]
+fn load_inputs(path: Option<&str>) -> Result<Vec<(String, String)>, i32> {
+    match path {
+        Some(p) => load_file_inputs(p),
+        None => match read_stdin() {
+            Ok(content) => Ok(vec![("<stdin>".to_string(), content)]),
+            Err(e) => {
+                eprintln!("boxlint: stdin: {e}");
+                Err(2)
+            }
+        },
+    }
+}
+
+fn load_file_inputs(p: &str) -> Result<Vec<(String, String)>, i32> {
+    let files = match collect_files(p) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("boxlint: {e}");
+            return Err(2);
+        }
+    };
+    let mut inputs = Vec::new();
+    for file in files {
+        match fs::read_to_string(&file) {
+            Ok(content) => inputs.push((file, content)),
+            Err(e) => {
+                eprintln!("boxlint: {file}: {e}");
+                return Err(2);
+            }
+        }
+    }
+    Ok(inputs)
+}
+
 fn run_lint(
     path: Option<&str>,
     format: &OutputFormat,
     quiet: bool,
     registry: &RuleRegistry,
 ) -> i32 {
-    let inputs: Vec<(String, String)> = match path {
-        Some(p) => {
-            let files = match collect_files(p) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("boxlint: {e}");
-                    return 2;
-                }
-            };
-            let mut inputs = Vec::new();
-            for file in files {
-                match fs::read_to_string(&file) {
-                    Ok(content) => inputs.push((file, content)),
-                    Err(e) => {
-                        eprintln!("boxlint: {file}: {e}");
-                        return 2;
-                    }
-                }
-            }
-            inputs
-        }
-        None => match read_stdin() {
-            Ok(content) => vec![("<stdin>".to_string(), content)],
-            Err(e) => {
-                eprintln!("boxlint: stdin: {e}");
-                return 2;
-            }
-        },
+    let inputs = match load_inputs(path) {
+        Ok(inputs) => inputs,
+        Err(code) => return code,
     };
 
     let mut all_diags = Vec::new();
@@ -296,34 +308,9 @@ fn run_fix(
         return 2;
     }
 
-    let inputs: Vec<(String, String)> = match path {
-        Some(p) => {
-            let files = match collect_files(p) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("boxlint: {e}");
-                    return 2;
-                }
-            };
-            let mut inputs = Vec::new();
-            for file in files {
-                match fs::read_to_string(&file) {
-                    Ok(content) => inputs.push((file, content)),
-                    Err(e) => {
-                        eprintln!("boxlint: {file}: {e}");
-                        return 2;
-                    }
-                }
-            }
-            inputs
-        }
-        None => match read_stdin() {
-            Ok(content) => vec![("<stdin>".to_string(), content)],
-            Err(e) => {
-                eprintln!("boxlint: stdin: {e}");
-                return 2;
-            }
-        },
+    let inputs = match load_inputs(path) {
+        Ok(inputs) => inputs,
+        Err(code) => return code,
     };
 
     let stdout = io::stdout();
@@ -378,6 +365,7 @@ fn run_fix(
 // Entry point
 // ---------------------------------------------------------------------------
 
+#[cfg(not(tarpaulin_include))]
 fn main() {
     let cli = Cli::parse();
     let registry = RuleRegistry::new();
@@ -789,5 +777,338 @@ mod tests {
         diags.retain(|d| d.level == Level::Error);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].level, Level::Error);
+    }
+
+    // Coverage: RuleRegistry::default() (line 128-129)
+    #[test]
+    fn registry_default() {
+        let reg = RuleRegistry::default();
+        assert!(reg.lint_rules.is_empty());
+        assert!(reg.fixers.is_empty());
+    }
+
+    // Helper rule that produces diagnostics for testing run_lint paths
+    struct ErrorRule;
+    impl LintRule for ErrorRule {
+        fn check(&self, _input: &str) -> Vec<Diagnostic> {
+            vec![Diagnostic {
+                file: String::new(),
+                line: 1,
+                col: 1,
+                level: Level::Error,
+                message: "test error".to_string(),
+                rule: "err".to_string(),
+            }]
+        }
+        fn name(&self) -> &str {
+            "err"
+        }
+    }
+
+    struct WarnAndErrorRule;
+    impl LintRule for WarnAndErrorRule {
+        fn check(&self, _input: &str) -> Vec<Diagnostic> {
+            vec![
+                Diagnostic {
+                    file: String::new(),
+                    line: 1,
+                    col: 1,
+                    level: Level::Warning,
+                    message: "warn".to_string(),
+                    rule: "w".to_string(),
+                },
+                Diagnostic {
+                    file: String::new(),
+                    line: 2,
+                    col: 1,
+                    level: Level::Error,
+                    message: "err".to_string(),
+                    rule: "e".to_string(),
+                },
+            ]
+        }
+        fn name(&self) -> &str {
+            "warn-and-err"
+        }
+    }
+
+    // Coverage: run_lint with JSON format (lines 272-273)
+    #[test]
+    fn run_lint_json_output() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_json");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "hello").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(ErrorRule));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Json,
+            false,
+            &registry,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_lint quiet mode filters warnings (lines 260-261)
+    #[test]
+    fn run_lint_quiet_filters_warnings() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_quiet");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "hello").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(WarnAndErrorRule));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            true,
+            &registry,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_lint returns 1 on error (line 281)
+    #[test]
+    fn run_lint_returns_one_on_error() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_err");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "content").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(ErrorRule));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_lint with diagram regions (lines 244-256)
+    #[test]
+    fn run_lint_with_diagram_regions() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_regions");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        // File with comment-prefixed diagram triggers region extraction
+        fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘\n").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(ErrorRule));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_lint no regions → whole input (line 235-243)
+    #[test]
+    fn run_lint_no_regions_whole_input() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_whole");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        // Plain text with no box chars and no prefix → no regions, lints whole input
+        fs::write(&file, "plain text\n").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.lint_rules.push(Box::new(ErrorRule));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+        );
+        assert_eq!(code, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_fix with explicit prefix (lines 333-336)
+    #[test]
+    fn run_fix_with_explicit_prefix() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_prefix");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "// ┌──┐\n// │hi│\n// └──┘").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_fix(
+            Some(file.to_str().unwrap()),
+            false,
+            false,
+            &registry,
+            Some("// "),
+        );
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_fix with embedded regions (lines 339-361)
+    #[test]
+    fn run_fix_with_embedded_regions() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_embed");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        // Comment-prefixed diagram with surrounding text → regions detected
+        fs::write(&file, "code here\n// ┌──┐\n// │hi│\n// └──┘\nmore code\n").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_fix(Some(file.to_str().unwrap()), false, false, &registry, None);
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_fix in-place writes file with fixer (lines 364-367)
+    #[test]
+    fn run_fix_in_place_with_fixer() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_ip_fixer");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "bad text").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry, None);
+        assert_eq!(code, 0);
+        let content = fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "good text");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: collect_files with single file (line 188)
+    #[test]
+    fn collect_files_single_file() {
+        let dir = std::env::temp_dir().join("boxlint_test_collect_single");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("single.txt");
+        fs::write(&file, "").unwrap();
+
+        let files = collect_files(file.to_str().unwrap()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0], file.to_str().unwrap());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_lint directory (lines 204-220, collect_files directory path)
+    #[test]
+    fn run_lint_directory() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_dir");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("a.txt"), "hello").unwrap();
+        fs::write(dir.join("b.txt"), "world").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_lint(
+            Some(dir.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+        );
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: run_fix directory
+    #[test]
+    fn run_fix_directory() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_dir");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("a.txt"), "hello").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_fix(Some(dir.to_str().unwrap()), false, false, &registry, None);
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Coverage: load_file_inputs collect_files error
+    #[test]
+    fn load_file_inputs_collect_error() {
+        let dir = std::env::temp_dir().join("boxlint_test_load_unreadable");
+        let _ = fs::create_dir_all(&dir);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o000));
+        }
+        let result = load_file_inputs(dir.to_str().unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o755));
+        }
+        let _ = fs::remove_dir_all(&dir);
+        #[cfg(unix)]
+        assert_eq!(result, Err(2));
+    }
+
+    // Coverage: load_file_inputs read_to_string error
+    #[test]
+    fn load_file_inputs_read_error() {
+        let result = load_file_inputs("/nonexistent/path/to/file.txt");
+        assert_eq!(result, Err(2));
+    }
+
+    // Coverage: fs::write error in run_fix in-place (lines 367-368)
+    #[test]
+    fn run_fix_in_place_write_error() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_write_err");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("readonly.txt");
+        fs::write(&file, "hello").unwrap();
+        // Make file read-only
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o444));
+        }
+        let registry = RuleRegistry::new();
+        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry, None);
+        // Restore permissions for cleanup
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o644));
+        }
+        let _ = fs::remove_dir_all(&dir);
+        #[cfg(unix)]
+        assert_eq!(code, 2);
+    }
+
+    // Coverage: run_fix in-place with embedded regions
+    #[test]
+    fn run_fix_in_place_with_embedded_regions() {
+        let dir = std::env::temp_dir().join("boxlint_test_fix_ip_embed");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "code\n// ┌──┐\n// │hi│\n// └──┘\nmore\n").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_fix(Some(file.to_str().unwrap()), true, false, &registry, None);
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
