@@ -81,15 +81,32 @@ bd sync                               # Sync with git
 
 Reference beads issue IDs in commit messages: `feat: add parser [boxlint-9dc]`
 
+### Pull Requests
+
+All changes go through PRs. Your job is not done until CI passes and the PR is merged.
+
+1. Create a PR with `gh pr create`
+2. Wait for CI — check with `gh pr checks <number>`
+3. If CI fails, fix and push again. CI must pass.
+4. Merge with `gh pr merge <number> --squash --delete-branch`
+5. Clean up the local branch: `git checkout main && git pull && git branch -d <branch>`
+
+Never leave stale PRs or branches. If a PR is abandoned, close it and delete the branch.
+
+### Secrets
+
+**NEVER commit secrets to git.** No API keys, tokens, passwords, or credentials in any file, ever. Check for secrets before every push. Use environment variables or external secret stores.
+
 ### Session Completion
 
-When ending a work session, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+When ending a work session, you MUST complete ALL steps below. Work is NOT complete until PRs are merged and branches are cleaned up.
 
 1. **Run quality gates** — `cargo build && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --all --check`
 2. **File issues** for remaining work with `bd create`
 3. **Update issue status** — close finished work, update in-progress items
-4. **Sync and push** — `bd sync && git push`
-5. **Verify** — `git status` must show up to date with origin
+4. **Push, wait for CI, merge** — do not leave open PRs behind
+5. **Clean up** — delete merged branches locally and remotely
+6. **Verify** — `git status` on main, up to date with origin, no stale branches
 
 ## Project Structure
 
