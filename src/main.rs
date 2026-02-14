@@ -1,5 +1,6 @@
 pub mod detect_arrows;
 pub mod detect_boxes;
+pub mod detect_labels;
 pub mod extract;
 pub mod fix_adjacent_boxes;
 pub mod fix_arrow_connect;
