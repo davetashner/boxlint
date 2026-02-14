@@ -2417,7 +2417,10 @@ mod tests {
     fn config_deserialize_valid() {
         let toml_str = r#"ignore = ["box-content-alignment", "arrow-connect"]"#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.ignore, vec!["box-content-alignment", "arrow-connect"]);
+        assert_eq!(
+            config.ignore,
+            vec!["box-content-alignment", "arrow-connect"]
+        );
     }
 
     #[test]
@@ -2454,11 +2457,7 @@ mod tests {
     fn load_config_boxlint_toml() {
         let dir = std::env::temp_dir().join("boxlint_test_config_toml");
         let _ = fs::create_dir_all(&dir);
-        fs::write(
-            dir.join("boxlint.toml"),
-            r#"ignore = ["arrow-connect"]"#,
-        )
-        .unwrap();
+        fs::write(dir.join("boxlint.toml"), r#"ignore = ["arrow-connect"]"#).unwrap();
 
         let config = load_config(&dir);
         assert_eq!(config.ignore, vec!["arrow-connect"]);
@@ -2470,11 +2469,7 @@ mod tests {
     fn load_config_boxlintrc_fallback() {
         let dir = std::env::temp_dir().join("boxlint_test_config_rc");
         let _ = fs::create_dir_all(&dir);
-        fs::write(
-            dir.join(".boxlintrc"),
-            r#"ignore = ["box-corner-edge"]"#,
-        )
-        .unwrap();
+        fs::write(dir.join(".boxlintrc"), r#"ignore = ["box-corner-edge"]"#).unwrap();
 
         let config = load_config(&dir);
         assert_eq!(config.ignore, vec!["box-corner-edge"]);
@@ -2486,16 +2481,8 @@ mod tests {
     fn load_config_boxlint_toml_takes_precedence() {
         let dir = std::env::temp_dir().join("boxlint_test_config_precedence");
         let _ = fs::create_dir_all(&dir);
-        fs::write(
-            dir.join("boxlint.toml"),
-            r#"ignore = ["arrow-connect"]"#,
-        )
-        .unwrap();
-        fs::write(
-            dir.join(".boxlintrc"),
-            r#"ignore = ["box-corner-edge"]"#,
-        )
-        .unwrap();
+        fs::write(dir.join("boxlint.toml"), r#"ignore = ["arrow-connect"]"#).unwrap();
+        fs::write(dir.join(".boxlintrc"), r#"ignore = ["box-corner-edge"]"#).unwrap();
 
         let config = load_config(&dir);
         assert_eq!(config.ignore, vec!["arrow-connect"]);
