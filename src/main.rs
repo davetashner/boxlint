@@ -1,7 +1,9 @@
 pub mod detect_arrows;
 pub mod detect_boxes;
 pub mod extract;
+pub mod fix_box_corners;
 pub mod grid;
+pub mod lint_box_corners;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -132,10 +134,17 @@ impl Default for RuleRegistry {
 
 impl RuleRegistry {
     pub fn new() -> Self {
-        Self {
+        let mut registry = Self {
             lint_rules: Vec::new(),
             fixers: Vec::new(),
-        }
+        };
+        registry
+            .lint_rules
+            .push(Box::new(crate::lint_box_corners::BoxCornerEdgeLint));
+        registry
+            .fixers
+            .push(Box::new(crate::fix_box_corners::BoxCornerEdgeFixer));
+        registry
     }
 
     pub fn run_lint(&self, input: &str) -> Vec<Diagnostic> {
@@ -573,7 +582,7 @@ mod tests {
         fs::write(&file, "").unwrap();
 
         let registry = RuleRegistry::new();
-        assert!(registry.lint_rules.is_empty());
+        assert!(!registry.lint_rules.is_empty());
         let code = run_lint(
             Some(file.to_str().unwrap()),
             &OutputFormat::Text,
@@ -783,8 +792,8 @@ mod tests {
     #[test]
     fn registry_default() {
         let reg = RuleRegistry::default();
-        assert!(reg.lint_rules.is_empty());
-        assert!(reg.fixers.is_empty());
+        assert!(!reg.lint_rules.is_empty());
+        assert!(!reg.fixers.is_empty());
     }
 
     // Helper rule that produces diagnostics for testing run_lint paths
