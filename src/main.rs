@@ -2491,6 +2491,19 @@ mod tests {
     }
 
     #[test]
+    fn load_config_read_error_returns_default() {
+        let dir = std::env::temp_dir().join("boxlint_test_config_read_err");
+        let _ = fs::create_dir_all(&dir);
+        // Create a directory named boxlint.toml — read_to_string on a directory fails
+        let _ = fs::create_dir_all(dir.join("boxlint.toml"));
+
+        let config = load_config(&dir);
+        assert!(config.ignore.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn load_config_parse_error_returns_default() {
         let dir = std::env::temp_dir().join("boxlint_test_config_bad");
         let _ = fs::create_dir_all(&dir);
