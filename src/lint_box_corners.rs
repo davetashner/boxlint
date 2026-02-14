@@ -127,11 +127,7 @@ struct TraceResult {
 /// Try to trace a single-line box from top-left '┌' at (r,c), returning
 /// diagnostics for the first problem found (or nothing if it's valid — valid
 /// boxes are already detected by `detect_boxes`).
-fn diagnose_single_box(
-    grid: &crate::grid::Grid,
-    r: usize,
-    c: usize,
-) -> TraceResult {
+fn diagnose_single_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceResult {
     let cols = grid.cols();
     let rows = grid.rows();
     let (tl_line, tl_col) = pos(r, c);
@@ -337,11 +333,7 @@ fn find_corner_on_col(
 }
 
 /// Try to trace a double-line box from top-left '╔' at (r,c).
-fn diagnose_double_box(
-    grid: &crate::grid::Grid,
-    r: usize,
-    c: usize,
-) -> TraceResult {
+fn diagnose_double_box(grid: &crate::grid::Grid, r: usize, c: usize) -> TraceResult {
     let cols = grid.cols();
     let rows = grid.rows();
     let (tl_line, tl_col) = pos(r, c);
@@ -521,10 +513,7 @@ fn diagnose_double_box(
 }
 
 /// Check a valid box for mixed corner styles.
-fn check_style_consistency(
-    grid: &crate::grid::Grid,
-    bounds: &BoundingRect,
-) -> Vec<Diagnostic> {
+fn check_style_consistency(grid: &crate::grid::Grid, bounds: &BoundingRect) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     let tl = bounds.top_left;
     let br = bounds.bottom_right;
@@ -547,8 +536,8 @@ fn check_style_consistency(
     // Check top-right
     let tr_expected = expected_corner(tl_ch, "top-right");
     if tr_ch != tr_expected {
-        let same_family = (is_single && is_single_corner(tr_ch))
-            || (is_double && is_double_corner(tr_ch));
+        let same_family =
+            (is_single && is_single_corner(tr_ch)) || (is_double && is_double_corner(tr_ch));
         if !same_family && is_box_corner(tr_ch) {
             let (l, co) = pos(tl.row, br.col);
             diags.push(diag(
@@ -566,8 +555,8 @@ fn check_style_consistency(
     // Check bottom-left
     let bl_expected = expected_corner(tl_ch, "bottom-left");
     if bl_ch != bl_expected {
-        let same_family = (is_single && is_single_corner(bl_ch))
-            || (is_double && is_double_corner(bl_ch));
+        let same_family =
+            (is_single && is_single_corner(bl_ch)) || (is_double && is_double_corner(bl_ch));
         if !same_family && is_box_corner(bl_ch) {
             let (l, co) = pos(br.row, tl.col);
             diags.push(diag(
@@ -585,8 +574,8 @@ fn check_style_consistency(
     // Check bottom-right
     let br_expected = expected_corner(tl_ch, "bottom-right");
     if br_ch != br_expected {
-        let same_family = (is_single && is_single_corner(br_ch))
-            || (is_double && is_double_corner(br_ch));
+        let same_family =
+            (is_single && is_single_corner(br_ch)) || (is_double && is_double_corner(br_ch));
         if !same_family && is_box_corner(br_ch) {
             let (l, co) = pos(br.row, br.col);
             diags.push(diag(
@@ -784,7 +773,11 @@ mod tests {
         let diags = lint(input);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].level, Level::Error);
-        assert!(diags[0].message.contains("expected '┘'"), "{}", diags[0].message);
+        assert!(
+            diags[0].message.contains("expected '┘'"),
+            "{}",
+            diags[0].message
+        );
         assert_eq!(diags[0].line, 3);
         assert_eq!(diags[0].col, 4);
     }
@@ -798,7 +791,9 @@ mod tests {
 └──┘";
         let diags = lint(input);
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("expected '─' but found 'X' on top edge"));
+        assert!(diags[0]
+            .message
+            .contains("expected '─' but found 'X' on top edge"));
         assert_eq!(diags[0].line, 1);
         assert_eq!(diags[0].col, 3);
     }
@@ -991,7 +986,7 @@ X  │
         let diags = lint(input);
         // The ┌ diagnosis returns empty (degenerate), so it becomes orphan
         // The ┐ └ ┘ are also orphans since no valid box owns them
-        assert!(diags.len() >= 1);
+        assert!(!diags.is_empty());
     }
 
     // 21. Degenerate height (r2 <= r+1) — no diagnostics from single diagnose
@@ -1000,7 +995,7 @@ X  │
         let input = "┌──┐\n└──┘";
         let diags = lint(input);
         // ┌ diagnosis returns empty (degenerate height), orphan reported
-        assert!(diags.len() >= 1);
+        assert!(!diags.is_empty());
     }
 
     // 22. Double box — broken top edge
@@ -1081,7 +1076,7 @@ X  ║
     fn double_degenerate_width() {
         let input = "╔╗\n╚╝";
         let diags = lint(input);
-        assert!(diags.len() >= 1);
+        assert!(!diags.is_empty());
     }
 
     // 30. Double box — degenerate height
@@ -1089,7 +1084,7 @@ X  ║
     fn double_degenerate_height() {
         let input = "╔══╗\n╚══╝";
         let diags = lint(input);
-        assert!(diags.len() >= 1);
+        assert!(!diags.is_empty());
     }
 
     // 31. Mixed style on valid box — test check_style_consistency directly
@@ -1104,7 +1099,10 @@ X  ║
             bottom_right: Position { row: 2, col: 3 },
         };
         let diags = check_style_consistency(&grid, &bounds);
-        assert!(diags.is_empty(), "well-formed box should have no style issues");
+        assert!(
+            diags.is_empty(),
+            "well-formed box should have no style issues"
+        );
     }
 
     // 32. edge_name helper
@@ -1164,7 +1162,9 @@ X  ║
     fn orphan_top_left_degenerate() {
         let input = "┌┐";
         let diags = lint(input);
-        assert!(diags.iter().any(|d| d.message.contains("orphan corner '┌'")));
+        assert!(diags
+            .iter()
+            .any(|d| d.message.contains("orphan corner '┌'")));
     }
 
     // 36. Orphan ╔ degenerate
@@ -1172,7 +1172,9 @@ X  ║
     fn orphan_double_top_left_degenerate() {
         let input = "╔╗";
         let diags = lint(input);
-        assert!(diags.iter().any(|d| d.message.contains("orphan corner '╔'")));
+        assert!(diags
+            .iter()
+            .any(|d| d.message.contains("orphan corner '╔'")));
     }
 
     // 37. Mixed style check — construct grid with mixed corners manually
@@ -1463,7 +1465,9 @@ X  ║
         // └ is accounted for by prescan
         assert!(diags.iter().any(|d| d.message.contains("runs off grid")));
         // └ should NOT be reported as orphan since it's accounted for
-        assert!(!diags.iter().any(|d| d.message.contains("orphan corner '└'")));
+        assert!(!diags
+            .iter()
+            .any(|d| d.message.contains("orphan corner '└'")));
     }
 
     // 60. filter_map coverage: input with arrows (non-Box nodes)
