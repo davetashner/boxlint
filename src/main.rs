@@ -62,6 +62,14 @@ pub enum Command {
         /// Skip these rules (comma-separated or repeated)
         #[arg(long, value_delimiter = ',')]
         ignore: Vec<String>,
+
+        /// Also auto-fix issues after linting
+        #[arg(long)]
+        fix: bool,
+
+        /// Write fixes back to the file instead of stdout (requires --fix)
+        #[arg(short = 'i', long = "in-place")]
+        in_place: bool,
     },
     /// Auto-fix a file or stdin
     Fix {
@@ -375,7 +383,18 @@ fn run_lint(
     quiet: bool,
     registry: &RuleRegistry,
     stdin_filename: Option<&str>,
+    fix: bool,
+    in_place: bool,
 ) -> i32 {
+    if in_place && !fix {
+        eprintln!("boxlint: --in-place requires --fix");
+        return 2;
+    }
+    if in_place && path.is_none() {
+        eprintln!("boxlint: --in-place requires a file argument");
+        return 2;
+    }
+
     let inputs = match load_inputs(path, stdin_filename) {
         Ok(inputs) => inputs,
         Err(code) => return code,
@@ -429,6 +448,43 @@ fn run_lint(
     }
 
     let has_errors = all_diags.iter().any(|d| d.level == Level::Error);
+
+    if fix {
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        for (file, content) in &inputs {
+            let regions = extract::extract_diagrams(content);
+            let output = if regions.is_empty()
+                || (regions.len() == 1 && regions[0].prefix.is_empty())
+            {
+                registry.run_fix(content)
+            } else {
+                let lines: Vec<&str> = content.lines().collect();
+                let mut result_lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+                for region in &regions {
+                    let fixed_content = registry.run_fix(&region.content);
+                    let fixed_lines: Vec<&str> = fixed_content.lines().collect();
+                    for (i, fixed_line) in fixed_lines.iter().enumerate() {
+                        let doc_idx = region.start_line - 1 + i;
+                        if doc_idx < result_lines.len() {
+                            result_lines[doc_idx] = format!("{}{}", region.prefix, fixed_line);
+                        }
+                    }
+                }
+                result_lines.join("\n")
+            };
+
+            if in_place {
+                if let Err(e) = fs::write(file, &output) {
+                    eprintln!("boxlint: {file}: {e}");
+                    return 2;
+                }
+            } else {
+                let _ = stdout.write_all(output.as_bytes());
+            }
+        }
+    }
+
     if has_errors {
         1
     } else {
@@ -667,6 +723,8 @@ fn main() {
             stdin_filename,
             rule,
             ignore,
+            fix,
+            in_place,
         } => {
             let rc = registry.filter(rule, ignore);
             if rc != 0 {
@@ -678,6 +736,8 @@ fn main() {
                     *quiet,
                     &registry,
                     stdin_filename.as_deref(),
+                    *fix,
+                    *in_place,
                 )
             }
         }
@@ -755,6 +815,8 @@ mod tests {
                 stdin_filename,
                 rule,
                 ignore,
+                fix,
+                in_place,
             } => {
                 assert!(path.is_none());
                 assert_eq!(format, OutputFormat::Text);
@@ -762,6 +824,8 @@ mod tests {
                 assert!(stdin_filename.is_none());
                 assert!(rule.is_empty());
                 assert!(ignore.is_empty());
+                assert!(!fix);
+                assert!(!in_place);
             }
             _ => panic!("expected Lint command"),
         }
@@ -929,6 +993,8 @@ mod tests {
             false,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 0);
 
@@ -944,6 +1010,8 @@ mod tests {
             false,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 2);
     }
@@ -1008,6 +1076,8 @@ mod tests {
             false,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 0);
 
@@ -1230,6 +1300,8 @@ mod tests {
             false,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1252,6 +1324,8 @@ mod tests {
             true,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1274,6 +1348,8 @@ mod tests {
             false,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1297,6 +1373,8 @@ mod tests {
             false,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1320,6 +1398,8 @@ mod tests {
             false,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 1);
 
@@ -1432,6 +1512,8 @@ mod tests {
             false,
             &registry,
             None,
+            false,
+            false,
         );
         assert_eq!(code, 0);
 
@@ -2109,5 +2191,168 @@ mod tests {
         assert_eq!(code, 0);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // lint --fix tests
+
+    #[test]
+    fn parse_lint_fix_flag() {
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--fix"]).unwrap();
+        match cli.command {
+            Command::Lint { fix, in_place, .. } => {
+                assert!(fix);
+                assert!(!in_place);
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn parse_lint_fix_in_place() {
+        let cli = Cli::try_parse_from(["boxlint", "lint", "--fix", "-i", "foo.txt"]).unwrap();
+        match cli.command {
+            Command::Lint {
+                fix,
+                in_place,
+                path,
+                ..
+            } => {
+                assert!(fix);
+                assert!(in_place);
+                assert_eq!(path.as_deref(), Some("foo.txt"));
+            }
+            _ => panic!("expected Lint command"),
+        }
+    }
+
+    #[test]
+    fn lint_in_place_without_fix_returns_two() {
+        let registry = RuleRegistry::new();
+        let code = run_lint(
+            Some("f.txt"),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            false,
+            true,
+        );
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn lint_fix_in_place_without_file_returns_two() {
+        let registry = RuleRegistry::new();
+        let code = run_lint(
+            None,
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            true,
+            true,
+        );
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn lint_fix_applies_fixes() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_fix");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "bad text").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            true,
+            false,
+        );
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_fix_in_place_writes_back() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_fix_ip");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "bad text").unwrap();
+
+        let mut registry = RuleRegistry::new();
+        registry.fixers.push(Box::new(TestFixer));
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            true,
+            true,
+        );
+        assert_eq!(code, 0);
+        let content = fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "good text");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_fix_with_embedded_regions() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_fix_embed");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("test.txt");
+        fs::write(&file, "code\n// ┌──┐\n// │hi│\n// └──┘\nmore\n").unwrap();
+
+        let registry = RuleRegistry::new();
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            true,
+            false,
+        );
+        assert_eq!(code, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_fix_in_place_write_error() {
+        let dir = std::env::temp_dir().join("boxlint_test_lint_fix_write_err");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("readonly.txt");
+        fs::write(&file, "hello").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o444));
+        }
+        let registry = RuleRegistry::new();
+        let code = run_lint(
+            Some(file.to_str().unwrap()),
+            &OutputFormat::Text,
+            false,
+            &registry,
+            None,
+            true,
+            true,
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o644));
+        }
+        let _ = fs::remove_dir_all(&dir);
+        #[cfg(unix)]
+        assert_eq!(code, 2);
     }
 }
